@@ -8,4 +8,4 @@ psql -d postgres -v ON_ERROR_STOP=1 -q -c "drop database if exists pms_test" -c 
 for f in tests/00_local_stubs.sql migrations/*.sql; do
   psql -d pms_test -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null 2>&1 || { echo "failed: $f"; psql -d pms_test -v ON_ERROR_STOP=1 -q -f "$f"; exit 1; }
 done
-psql -d pms_test -v ON_ERROR_STOP=1 -q -At -o /dev/null -f tests/10_logic_test.sql 2>&1 | sed "s/^psql:[^ ]* NOTICE:  //"
+cat tests/10_logic_test.sql tests/20_upgrade_test.sql | psql -d pms_test -v ON_ERROR_STOP=1 -q -At -o /dev/null 2>&1 | sed "s/^.*NOTICE:  //"

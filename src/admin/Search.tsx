@@ -4,8 +4,8 @@ import { supabase, must } from '../lib/supabase';
 import { useQuery } from '../lib/useQuery';
 import { useSettings } from '../lib/auth';
 import { money, date, initials, LEDGER_TYPE } from '../lib/format';
-import type { Profile, Investment, LedgerEntry, Redemption } from '../lib/types';
-import { Empty, ErrorNote, Loading, PageHead, KycBadge, InvBadge, LedgerBadge, RedBadge, Badge } from '../ui/kit';
+import type { Profile, Investment, LedgerEntry } from '../lib/types';
+import { Empty, ErrorNote, Loading, PageHead, KycBadge, InvBadge, LedgerBadge } from '../ui/kit';
 import { Icon } from '../ui/Icon';
 
 type Lite = Pick<Profile, 'id' | 'full_name' | 'code' | 'email'>;
@@ -20,20 +20,18 @@ async function runSearch(raw: string) {
   const q = clean(raw);
   if (!q) return null;
   const like = `%${q}%`;
-  const [people, invs, ledger, reds] = await Promise.all([
+  const [people, invs, ledger] = await Promise.all([
     supabase.from('profiles').select('*').eq('role', 'investor')
       .or(`full_name.ilike.${like},email.ilike.${like},code.ilike.${like},phone.ilike.${like}`).order('full_name').limit(LIMIT),
     supabase.from('investments').select('*').or(`code.ilike.${like},agreement_ref.ilike.${like},deposit_ref.ilike.${like}`).order('created_at', { ascending: false }).limit(LIMIT),
-    supabase.from('ledger_entries').select('*').or(`code.ilike.${like},reference.ilike.${like}`).order('occurred_on', { ascending: false }).limit(LIMIT),
-    supabase.from('redemption_requests').select('*').or(`code.ilike.${like},payment_ref.ilike.${like}`).order('created_at', { ascending: false }).limit(LIMIT)
+    supabase.from('ledger_entries').select('*').or(`code.ilike.${like},reference.ilike.${like}`).order('occurred_on', { ascending: false }).limit(LIMIT)
   ]);
   const P = must(people) as Profile[];
   const I = must(invs) as Investment[];
   const L = must(ledger) as LedgerEntry[];
-  const R = must(reds) as Redemption[];
 
-  const pIds = [...new Set([...I.map(i => i.investor_id), ...L.map(l => l.investor_id), ...R.map(r => r.investor_id)].filter((x): x is string => !!x))];
-  const iIds = [...new Set([...L.map(l => l.investment_id), ...R.map(r => r.investment_id)].filter((x): x is string => !!x))];
+  const pIds = [...new Set([...I.map(i => i.investor_id), ...L.map(l => l.investor_id)].filter((x): x is string => !!x))];
+  const iIds = [...new Set([...L.map(l => l.investment_id)].filter((x): x is string => !!x))];
   const [pp, ii] = await Promise.all([
     pIds.length ? supabase.from('profiles').select('id,full_name,code,email').in('id', pIds) : null,
     iIds.length ? supabase.from('investments').select('id,code').in('id', iIds) : null
@@ -42,7 +40,7 @@ async function runSearch(raw: string) {
   if (pp) (must(pp) as Lite[]).forEach(p => { names[p.id] = p; });
   const codes: Record<string, string> = {};
   if (ii) (must(ii) as { id: string; code: string }[]).forEach(x => { codes[x.id] = x.code; });
-  return { P, I, L, R, names, codes };
+  return { P, I, L, names, codes };
 }
 
 export function Search() {
@@ -56,12 +54,12 @@ export function Search() {
 
   const submit = (e: FormEvent) => { e.preventDefault(); const v = input.trim(); if (v) setSp({ q: v }); };
   const d = q.data;
-  const total = d ? d.P.length + d.I.length + d.L.length + d.R.length : 0;
+  const total = d ? d.P.length + d.I.length + d.L.length : 0;
   const more = (n: number) => (n >= LIMIT ? `first ${LIMIT}` : `${n}`);
 
   return (
     <>
-      <PageHead crumbs={['Search']} title="Search" sub={term ? (d ? `${total} result${total === 1 ? '' : 's'} for “${term}”` : `Searching for “${term}”…`) : 'Find investors, investments, transactions and redemptions.'} />
+      <PageHead crumbs={['Search']} title="Search" sub={term ? (d ? `${total} result${total === 1 ? '' : 's'} for “${term}”` : `Searching for “${term}”…`) : 'Find investors, investments and transactions.'} />
       <form onSubmit={submit} className="card"><div className="toolbar" style={{ borderBottom: 0 }}>
         <label className="search" style={{ flex: 1 }}><Icon name="search" /><input value={input} onChange={e => setInput(e.target.value)} placeholder="Name, email, phone, INVR-…, INV-…, TXN-…, RDM-…, bank reference" aria-label="Search" autoFocus /></label>
         <button className="btn primary">Search</button>
@@ -116,21 +114,6 @@ export function Search() {
                     </div>
                   );
                 })}
-              </div>
-            </div>
-          )}
-          {d.R.length > 0 && (
-            <div className="card">
-              <div className="card-h"><h3>Redemptions</h3><div className="r">{more(d.R.length)}</div></div>
-              <div className="card-b list">
-                {d.R.map(r => (
-                  <div key={r.id} style={{ cursor: 'pointer' }} onClick={() => nav('/admin/redemptions/' + r.code)}>
-                    <div className="grow"><b><span className="mono">{r.code}</span> · {d.names[r.investor_id]?.full_name || '—'}</b>
-                      <span>{d.codes[r.investment_id] || ''} · requested {date(r.created_at)}{r.payment_ref ? ' · ' + r.payment_ref : ''}</span></div>
-                    {r.type === 'early' ? <Badge cls="b-red">Early</Badge> : <Badge cls="b-grey">At maturity</Badge>}
-                    <RedBadge s={r.status} />
-                  </div>
-                ))}
               </div>
             </div>
           )}

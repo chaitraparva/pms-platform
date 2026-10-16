@@ -6,10 +6,10 @@ import { useAuth, useSettings } from '../lib/auth';
 import { createUser, resendAccess } from '../lib/adminApi';
 import { uploadDocument, openDocument, deleteDocument } from '../lib/docs';
 import { downloadCsv } from '../lib/csv';
-import { money, date, initials, rate, today, LEDGER_TYPE } from '../lib/format';
-import type { Profile, Investment, Balance, Redemption, LedgerEntry, DocumentRow, KycStatus } from '../lib/types';
+import { money, date, dateTime, initials, isUnlocked, lockinText, rate, today, LEDGER_TYPE } from '../lib/format';
+import type { AuditLog, Branch, Profile, Investment, Balance, LedgerEntry, DocumentRow, KycStatus } from '../lib/types';
 import { DataTable, Col } from '../ui/DataTable';
-import { Kpi, Empty, ErrorNote, Loading, PageHead, KycBadge, AcctBadge, InvBadge, RedBadge, LedgerBadge, Drawer, Modal, Field, useAction, Badge } from '../ui/kit';
+import { Kpi, Empty, ErrorNote, Loading, PageHead, KycBadge, AcctBadge, InvBadge, LedgerBadge, Drawer, Modal, Field, useAction, Badge } from '../ui/kit';
 import { Icon } from '../ui/Icon';
 
 const LIVE = ['active', 'matured', 'redemption_requested', 'redemption_processing'];
@@ -27,7 +27,9 @@ function maskId(v: string): string {
 const outstandingOf = (b?: Balance) => (b ? Number(b.unapproved) + Number(b.approved) + Number(b.processing) : 0);
 const fmtBytes = (n: number) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
 
-interface Row extends Profile { principal: number; active: number; accrued: number; paid: number; next: string | null }
+interface Row extends Profile { principal: number; unlocked: number; accrued: number; paid: number; next: string | null; branch: string }
+
+export const loadBranches = async () => must(await supabase.from('branches').select('*').order('name')) as Branch[];
 
 /* =============================== DIRECTORY =============================== */
 export function Investors() {
@@ -35,52 +37,62 @@ export function Investors() {
   const [sp, setSp] = useSearchParams();
   const [adding, setAdding] = useState(sp.get('new') === '1');
   const q = useQuery(async () => {
-    const [people, invs, bal] = await Promise.all([
+    const [people, invs, bal, branches] = await Promise.all([
       fetchAll<Profile>((a, b) => supabase.from('profiles').select('*').eq('role', 'investor').order('created_at', { ascending: false }).range(a, b)),
-      fetchAll<Pick<Investment, 'id' | 'investor_id' | 'principal' | 'status' | 'maturity_date'>>((a, b) => supabase.from('investments').select('id,investor_id,principal,status,maturity_date').range(a, b)),
-      fetchAll<Balance>((a, b) => supabase.from('investment_balances').select('*').range(a, b))
+      fetchAll<Pick<Investment, 'id' | 'investor_id' | 'principal' | 'status' | 'maturity_date' | 'lockin_end_date'>>((a, b) => supabase.from('investments').select('id,investor_id,principal,status,maturity_date,lockin_end_date').range(a, b)),
+      fetchAll<Balance>((a, b) => supabase.from('investment_balances').select('*').range(a, b)),
+      loadBranches()
     ]);
+    const bn = new Map(branches.map(b => [b.id, b.name]));
     const bm = new Map(bal.map(x => [x.investment_id, x]));
     const by = new Map<string, typeof invs>();
     invs.forEach(i => { const l = by.get(i.investor_id) || []; l.push(i); by.set(i.investor_id, l); });
-    return people.map<Row>(p => {
+    const rows = people.map<Row>(p => {
       const m = by.get(p.id) || [];
       const live = m.filter(i => LIVE.includes(i.status));
       return {
         ...p,
+        branch: p.branch_id ? bn.get(p.branch_id) || '' : '',
         principal: live.reduce((s, i) => s + Number(i.principal), 0),
-        active: live.length,
+        unlocked: live.filter(i => isUnlocked(i)).reduce((s, i) => s + Number(i.principal), 0),
         accrued: m.reduce((s, i) => s + Number(bm.get(i.id)?.accrued || 0), 0),
         paid: m.reduce((s, i) => s + Number(bm.get(i.id)?.paid || 0), 0),
-        next: live.filter(i => i.status === 'active').map(i => i.maturity_date).filter((x): x is string => !!x).sort()[0] || null
+        next: live.filter(i => !isUnlocked(i)).map(i => i.lockin_end_date).filter((x): x is string => !!x).sort()[0] || null
       };
     });
+    return { rows, branches };
   }, []);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [assigning, setAssigning] = useState(false);
 
   const closeAdd = () => { setAdding(false); if (sp.get('new')) { sp.delete('new'); setSp(sp, { replace: true }); } };
-  const rows = q.data || [];
+  const rows = q.data?.rows || [];
+  const branches = q.data?.branches || [];
+  const branchParam = sp.get('branch') || '';
   const cols: Col<Row>[] = useMemo(() => [
     { h: 'Investor', v: r => r.full_name, r: r => <><b>{r.full_name || '—'}</b><span className="sub">{r.code} · {r.email}</span></> },
+    { h: 'Branch', v: r => r.branch || 'zz', r: r => r.branch || <span className="muted">Not assigned</span> },
     { h: 'Phone', v: r => r.phone, r: r => <span className="num">{r.phone || '—'}</span> },
     { h: 'Registered', v: r => r.created_at, r: r => date(r.created_at) },
     { h: 'Verification', v: r => r.kyc_status, r: r => <KycBadge k={r.kyc_status} /> },
     { h: 'Account', v: r => r.account_status, r: r => <AcctBadge s={r.account_status} /> },
     { h: 'Principal', n: true, v: r => r.principal, r: r => money(r.principal) },
-    { h: 'Active', n: true, v: r => r.active },
+    { h: 'Unlocked', n: true, v: r => r.unlocked, r: r => money(r.unlocked) },
     { h: 'Accrued', n: true, v: r => r.accrued, r: r => money(r.accrued) },
     { h: 'Paid', n: true, v: r => r.paid, r: r => <span className="pos">{money(r.paid)}</span> },
-    { h: 'Next maturity', v: r => r.next || '9999', r: r => (r.next ? date(r.next) : <span className="muted">—</span>) }
+    { h: 'Next unlock', v: r => r.next || '9999', r: r => (r.next ? date(r.next) : <span className="muted">—</span>) }
   ], []);
 
   const exportCsv = () => downloadCsv(`investors-${today()}`,
-    ['Investor ID', 'Name', 'Email', 'Phone', 'City', 'Registered', 'KYC', 'Account', 'Principal (live)', 'Active investments', 'Accrued', 'Paid', 'Next maturity'],
-    rows.map(r => [r.code, r.full_name, r.email, r.phone, r.city, r.created_at.slice(0, 10), r.kyc_status, r.account_status, r.principal, r.active, r.accrued, r.paid, r.next || '']));
+    ['Investor ID', 'Name', 'Email', 'Branch', 'Phone', 'City', 'Registered', 'KYC', 'Account', 'Principal (live)', 'Unlocked principal', 'Accrued', 'Paid', 'Next unlock'],
+    rows.map(r => [r.code, r.full_name, r.email, r.branch, r.phone, r.city, r.created_at.slice(0, 10), r.kyc_status, r.account_status, r.principal, r.unlocked, r.accrued, r.paid, r.next || '']));
 
   return (
     <>
       <PageHead crumbs={['Investors']} title="Investors"
-        sub={q.data ? `${rows.length} registered · ${rows.filter(r => r.kyc_status === 'pending').length} awaiting verification` : 'Loading…'}
+        sub={q.data ? `${rows.length} registered · ${rows.filter(r => r.kyc_status === 'pending').length} awaiting verification · ${rows.filter(r => !r.branch_id).length} without a branch` : 'Loading…'}
         actions={<>
+          {sel.size > 0 && <button className="btn" onClick={() => setAssigning(true)}><Icon name="branch" />Assign branch ({sel.size})</button>}
           <button className="btn" onClick={exportCsv} disabled={!rows.length}><Icon name="download" />Export CSV</button>
           <button className="btn accent" onClick={() => setAdding(true)}><Icon name="plus" />Add investor</button>
         </>} />
@@ -92,19 +104,49 @@ export function Investors() {
           </Empty>
         </div></div>
       ) : (
-        <DataTable<Row> rows={rows} cols={cols} rowKey={r => r.id} searchPh="Search name, ID, email, phone" sort={2}
+        <DataTable<Row> key={branchParam} rows={rows} cols={cols} rowKey={r => r.id} searchPh="Search name, ID, email, phone" sort={3}
           text={r => `${r.code} ${r.email} ${r.phone} ${r.city}`}
-          filters={[['All', 'all'], ['Verified', 'verified'], ['KYC pending', 'pending'], ['KYC rejected', 'rejected'], ['Suspended', 'suspended']]}
-          filterFn={(r, f) => f === 'all' || r.kyc_status === f || r.account_status === f}
+          filters={[['All', 'all'], ...branches.map(b => [b.name, 'b:' + b.code] as [string, string]), ['No branch', 'b:'], ['KYC pending', 'pending'], ['Suspended', 'suspended']]}
+          filterFn={(r, f) => f === 'all' || (f.startsWith('b:') ? (f === 'b:' ? !r.branch_id : branches.find(b => b.code === f.slice(2))?.id === r.branch_id) : r.kyc_status === f || r.account_status === f)}
+          initialFilter={branchParam ? 'b:' + (branchParam === 'none' ? '' : branchParam) : undefined}
+          select={{ selected: sel, onChange: setSel }}
           href={r => (r.code ? '/admin/investors/' + r.code : null)} emptyTitle="No matching investors" />
       )}
+      {assigning && <BranchDialog ids={[...sel]} label={`${sel.size} investor${sel.size === 1 ? '' : 's'}`} current={null} branches={branches} onClose={() => setAssigning(false)} onDone={() => { setSel(new Set()); setAssigning(false); }} />}
       {adding && <AddInvestor onClose={closeAdd} onDone={code => { closeAdd(); if (code) nav('/admin/investors/' + code); }} />}
     </>
   );
 }
 
+/** Assign one or more investors to a branch (or remove the branch). Every change is audited. */
+export function BranchDialog({ ids, label, current, branches, onClose, onDone }: { ids: string[]; label: string; current: string | null; branches: Branch[]; onClose: () => void; onDone?: () => void }) {
+  const act = useAction();
+  const [to, setTo] = useState(current || '');
+  const [reason, setReason] = useState('');
+  const [tried, setTried] = useState(false);
+  const go = async () => {
+    setTried(true); if (!reason.trim()) return;
+    const r = await act.run(() => rpc<number>('admin_set_investor_branch', { p_ids: ids, p_branch: to || null, p_reason: reason.trim() }),
+      ['Branch updated', `${label} · recorded in audit log`]);
+    if (r !== undefined) { refreshAll(); (onDone || onClose)(); }
+  };
+  return (
+    <Modal title={`Branch for ${label}`} sub="Branch totals on the Overview update straight away. Investments and their terms are not changed." onClose={onClose}
+      foot={<><button className="btn ghost" onClick={onClose}>Cancel</button><button className="btn primary" onClick={go} disabled={act.busy}>Save branch</button></>}>
+      <Field label="Branch"><select className="input" value={to} onChange={e => setTo(e.target.value)}>
+        <option value="">No branch</option>{branches.map(b => <option key={b.id} value={b.id}>{b.name}{b.status !== 'active' ? ' (inactive)' : ''}</option>)}
+      </select></Field>
+      <Field label="Reason (saved to audit log) *" err={tried && !reason.trim() ? 'Enter a reason.' : null}>
+        <input className={'input ' + (tried && !reason.trim() ? 'bad' : '')} value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Investor joined through the Tumkur office" />
+      </Field>
+    </Modal>
+  );
+}
+
 function AddInvestor({ onClose, onDone }: { onClose: () => void; onDone: (code: string) => void }) {
   const act = useAction();
+  const bq = useQuery(loadBranches, []);
+  const [branch, setBranch] = useState('');
   const [mode, setMode] = useState<'invite' | 'password'>('invite');
   const [f, setF] = useState({ full_name: '', email: '', phone: '', city: '', address: '', id_number: '', bank_name: '', bank_account: '', bank_ifsc: '', password: '' });
   const [tried, setTried] = useState(false);
@@ -123,6 +165,7 @@ function AddInvestor({ onClose, onDone }: { onClose: () => void; onDone: (code: 
       phone: f.phone.trim(), city: f.city.trim(), address: f.address.trim(), id_number_masked: maskId(f.id_number), bank_name: f.bank_name.trim(),
       bank_account_masked: maskId(f.bank_account), bank_ifsc: f.bank_ifsc.trim().toUpperCase()
     }), [mode === 'invite' ? 'Invitation sent' : 'Investor created', mode === 'invite' ? `${f.email.trim()} will receive a link to choose a password.` : 'Share the temporary password securely.']);
+    if (r && branch) await act.run(() => rpc('admin_set_investor_branch', { p_ids: [r.id], p_branch: branch, p_reason: 'Branch set when the investor was added' }));
     if (r) { refreshAll(); onDone(r.code); }
   };
   return (
@@ -139,7 +182,14 @@ function AddInvestor({ onClose, onDone }: { onClose: () => void; onDone: (code: 
             ? 'We email a secure link. The investor chooses their own password — you never see it.'
             : 'You set a password now and share it with the investor yourself (e.g. by phone). Ask them to change it after their first sign-in.'}</p>
         </div>
-        <Field label="Full name *" err={tried ? errs.full_name : null}><input className={'input ' + (tried && errs.full_name ? 'bad' : '')} value={f.full_name} onChange={set('full_name')} placeholder="As on ID document" /></Field>
+        <div className="f-row">
+          <Field label="Full name *" err={tried ? errs.full_name : null}><input className={'input ' + (tried && errs.full_name ? 'bad' : '')} value={f.full_name} onChange={set('full_name')} placeholder="As on ID document" /></Field>
+          <Field label="Branch" hint="Tumkur or Bangalore. You can change it later.">
+            <select className="input" value={branch} onChange={e => setBranch(e.target.value)}>
+              <option value="">Choose later</option>{(bq.data || []).filter(b => b.status === 'active').map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </Field>
+        </div>
         <div className="f-row">
           <Field label="Email *" err={tried ? errs.email : null}><input className={'input ' + (tried && errs.email ? 'bad' : '')} type="email" value={f.email} onChange={set('email')} /></Field>
           <Field label="Phone"><input className="input" value={f.phone} onChange={set('phone')} /></Field>
@@ -167,26 +217,27 @@ function AddInvestor({ onClose, onDone }: { onClose: () => void; onDone: (code: 
 
 /* =============================== DETAIL =============================== */
 interface DetailData {
-  p: Profile; invs: Investment[]; bal: Map<string, Balance>; reds: Redemption[]; ledger: LedgerEntry[]; docs: DocumentRow[]; invCode: Record<string, string>;
+  p: Profile; invs: Investment[]; bal: Map<string, Balance>; history: AuditLog[]; ledger: LedgerEntry[]; docs: DocumentRow[]; invCode: Record<string, string>; branches: Branch[];
 }
 
 async function loadDetail(code: string): Promise<DetailData | null> {
   const p = must(await supabase.from('profiles').select('*').eq('code', code).maybeSingle()) as Profile | null;
   if (!p || !(p as Profile).id) return null;
-  const [invs, reds, ledger, docs] = await Promise.all([
+  const [invs, history, ledger, docs, branches] = await Promise.all([
     fetchAll<Investment>((a, b) => supabase.from('investments').select('*').eq('investor_id', p.id).order('created_at', { ascending: false }).range(a, b)),
-    supabase.from('redemption_requests').select('*').eq('investor_id', p.id).order('created_at', { ascending: false }).limit(50),
+    supabase.from('audit_logs').select('*').eq('entity_id', p.id).order('at', { ascending: false }).limit(30),
     supabase.from('ledger_entries').select('*').eq('investor_id', p.id).order('occurred_on', { ascending: false }).order('created_at', { ascending: false }).limit(12),
-    supabase.from('documents').select('*').eq('owner_id', p.id).order('created_at', { ascending: false })
+    supabase.from('documents').select('*').eq('owner_id', p.id).order('created_at', { ascending: false }),
+    loadBranches()
   ]);
   const ids = invs.map(i => i.id);
   const bal = ids.length ? must(await supabase.from('investment_balances').select('*').in('investment_id', ids)) as Balance[] : [];
   const invCode: Record<string, string> = {};
   invs.forEach(i => { invCode[i.id] = i.code; });
-  return { p, invs, bal: new Map(bal.map(b => [b.investment_id, b])), reds: must(reds) as Redemption[], ledger: must(ledger) as LedgerEntry[], docs: must(docs) as DocumentRow[], invCode };
+  return { p, invs, bal: new Map(bal.map(b => [b.investment_id, b])), history: must(history) as AuditLog[], ledger: must(ledger) as LedgerEntry[], docs: must(docs) as DocumentRow[], invCode, branches };
 }
 
-type Dialog = null | 'kyc-verified' | 'kyc-rejected' | 'status' | 'edit' | 'upload' | { del: DocumentRow };
+type Dialog = null | 'kyc-verified' | 'kyc-rejected' | 'status' | 'edit' | 'upload' | 'branch' | { del: DocumentRow };
 
 export function InvestorDetail() {
   const { code = '' } = useParams();
@@ -203,13 +254,15 @@ export function InvestorDetail() {
     <><PageHead crumbs={['Investors', 'Not found']} title="Investor not found" />
       <Empty title="Investor not found">No investor has the code {code}. <Link to="/admin/investors">Back to investors</Link></Empty></>
   );
-  const { p, invs, bal, reds, ledger, docs, invCode } = q.data;
+  const { p, invs, bal, history, ledger, docs, invCode, branches } = q.data;
   const live = invs.filter(i => LIVE.includes(i.status));
   const principal = live.reduce((x, i) => x + Number(i.principal), 0);
+  const unlocked = live.filter(i => isUnlocked(i)).reduce((x, i) => x + Number(i.principal), 0);
+  const branch = branches.find(b => b.id === p.branch_id) || null;
   const accrued = invs.reduce((x, i) => x + Number(bal.get(i.id)?.accrued || 0), 0);
   const paid = invs.reduce((x, i) => x + Number(bal.get(i.id)?.paid || 0), 0);
   const outstanding = invs.reduce((x, i) => x + outstandingOf(bal.get(i.id)), 0);
-  const next = live.filter(i => i.status === 'active').map(i => i.maturity_date).filter((x): x is string => !!x).sort()[0] || null;
+  const next = live.filter(i => !isUnlocked(i)).map(i => i.lockin_end_date).filter((x): x is string => !!x).sort()[0] || null;
   const self = me?.id === p.id;
 
   const resend = () => act.run(() => resendAccess(p.email), ['Access email sent', `${p.email} will receive a link to set a password.`]);
@@ -232,7 +285,7 @@ export function InvestorDetail() {
         </>}>
         <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
           <div className="avatar" style={{ width: 52, height: 52, fontSize: 17 }}>{initials(p.full_name || p.email)}</div>
-          <div><h1>{p.full_name || p.email}</h1><p>{[p.code, p.email, p.phone, p.city].filter(Boolean).join(' · ')}</p></div>
+          <div><h1>{p.full_name || p.email}</h1><p>{[p.code, p.email, branch ? branch.name + ' branch' : 'No branch', p.phone, p.city].filter(Boolean).join(' · ')}</p></div>
         </div>
       </PageHead>
 
@@ -246,10 +299,10 @@ export function InvestorDetail() {
 
       <div className="kpis">
         <Kpi label="Principal (live)" value={money(principal)} sub={`${live.length} live investment${live.length === 1 ? '' : 's'}`} />
+        <Kpi label="Unlocked principal" value={money(unlocked)} sub={next ? `Next unlock ${date(next)}` : 'Nothing in lock-in'} tip="Principal of investments whose lock-in has ended. A status only: nothing is paid out automatically." />
         <Kpi label="Accrued returns" value={money(accrued)} tip="Sum of accruals on all of this investor’s investments, net of reversals." />
         <Kpi label="Returns paid" value={money(paid)} cls="pos" sub="Confirmed with bank reference" />
         <Kpi label="Outstanding" value={money(outstanding)} sub="Accrued, not yet paid" subCls={outstanding ? 'warn' : ''} />
-        <Kpi label="Next maturity" value={next ? date(next) : '—'} />
       </div>
 
       <div className="grid g-2-1">
@@ -258,14 +311,14 @@ export function InvestorDetail() {
           <div className="tbl">
             {invs.length ? (
               <table>
-                <thead><tr><th>Investment</th><th>Plan</th><th className="n">Principal</th><th>Rate</th><th>Maturity</th><th className="n">Accrued</th><th className="n">Paid</th><th>Status</th></tr></thead>
+                <thead><tr><th>Investment</th><th>Plan</th><th className="n">Principal</th><th>Rate</th><th>Start</th><th>Maturity</th><th className="n">Accrued</th><th className="n">Paid</th><th>Status</th></tr></thead>
                 <tbody>{invs.map(i => {
                   const b = bal.get(i.id);
                   return (
                     <tr key={i.id} className="click" onClick={() => nav('/admin/investments/' + i.code)}>
                       <td className="m">{i.code}</td>
-                      <td>{i.plan_name} v{i.plan_version}<span className="sub">{i.lockin_months} months</span></td>
-                      <td className="n">{money(i.principal)}</td><td>{rate(i.monthly_rate)}</td><td>{date(i.maturity_date)}</td>
+                      <td>{i.plan_name} v{i.plan_version}<span className="sub">{lockinText(i.lockin_months)}</span></td>
+                      <td className="n">{money(i.principal)}</td><td>{rate(i.monthly_rate)}</td><td>{date(i.start_date || i.expected_start)}</td><td>{date(i.maturity_date)}</td>
                       <td className="n">{money(b?.accrued || 0)}</td><td className="n pos">{money(b?.paid || 0)}</td>
                       <td><InvBadge i={i} approachingDays={s.approaching_days} /></td>
                     </tr>
@@ -280,6 +333,7 @@ export function InvestorDetail() {
           <div className="card-h"><h3>Profile & verification</h3></div>
           <div className="card-b" style={{ display: 'grid', gap: 14 }}>
             <dl className="kv">
+              <dt>Branch</dt><dd>{branch ? branch.name : <span className="muted">Not assigned</span>} <a style={{ cursor: 'pointer', marginLeft: 6 }} onClick={() => setDlg('branch')}>Change</a></dd>
               <dt>Registered</dt><dd>{date(p.created_at)}</dd>
               <dt>City</dt><dd>{p.city || '—'}</dd>
               <dt>Address</dt><dd>{p.address || '—'}</dd>
@@ -317,14 +371,14 @@ export function InvestorDetail() {
           </div>
         </div>
         <div className="card">
-          <div className="card-h"><h3>Redemption requests</h3></div>
+          <div className="card-h"><h3>Account history</h3><div className="r"><Link to="/admin/audit">Audit log</Link></div></div>
           <div className="card-b list">
-            {reds.length ? reds.map(r => (
-              <div key={r.id} style={{ cursor: 'pointer' }} onClick={() => nav('/admin/redemptions/' + r.code)}>
-                <div className="grow"><b>{r.code} · {invCode[r.investment_id] || ''}</b><span>{r.type === 'early' ? 'Early' : 'At maturity'} · requested {date(r.created_at)}</span></div>
-                <RedBadge s={r.status} />
+            {history.length ? history.map(h => (
+              <div key={h.id}>
+                <div className="grow"><b>{h.action === 'investor.branch' ? `Branch: ${(h.before as { branch?: string } | null)?.branch || 'none'} → ${(h.after as { branch?: string } | null)?.branch || 'none'}` : h.action.replace(/[._]/g, ' ')}</b>
+                  <span>{dateTime(h.at)} · {h.actor_name}{h.reason ? ' · ' + h.reason : ''}</span></div>
               </div>
-            )) : <Empty title="No redemption requests">Requests appear when this investor asks to redeem.</Empty>}
+            )) : <Empty title="No changes recorded">Branch, verification and account changes appear here.</Empty>}
           </div>
         </div>
       </div>
@@ -347,6 +401,7 @@ export function InvestorDetail() {
 
       {(dlg === 'kyc-verified' || dlg === 'kyc-rejected') && <KycDialog p={p} to={dlg === 'kyc-verified' ? 'verified' : 'rejected'} onClose={() => setDlg(null)} />}
       {dlg === 'status' && <StatusDialog p={p} onClose={() => setDlg(null)} />}
+      {dlg === 'branch' && <BranchDialog ids={[p.id]} label={p.full_name || p.email} current={p.branch_id} branches={branches} onClose={() => setDlg(null)} />}
       {dlg === 'edit' && <EditInvestor p={p} onClose={() => setDlg(null)} />}
       {dlg === 'upload' && <UploadDoc p={p} invs={invs} onClose={() => setDlg(null)} />}
       {dlg && typeof dlg === 'object' && <DeleteDoc d={dlg.del} onClose={() => setDlg(null)} />}

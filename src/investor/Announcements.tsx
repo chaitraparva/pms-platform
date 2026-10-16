@@ -7,12 +7,18 @@ import { date, dateTime } from '../lib/format';
 import { Badge, Drawer, Empty, ErrorNote, Loading, PageHead } from '../ui/kit';
 import type { Announcement, Notification } from '../lib/types';
 import { Prose } from './parts';
+import { BrochureModal, loadMyBrochures } from './Brochures';
+import { Icon } from '../ui/Icon';
+import type { MyBrochure } from '../lib/types';
 
 /** Unread = the investor's 'announcement' notification for it has not been read. */
 export function Announcements() {
   const { profile, settings } = useAuth();
   const [sp, setSp] = useSearchParams();
   const [openId, setOpenId] = useState<string | null>(null);
+  const [bro, setBro] = useState<MyBrochure | null>(null);
+  const bq = useQuery(loadMyBrochures, []);
+  const bros = bq.data || [];
   const q = useQuery(async () => {
     const [anns, ns] = await Promise.all([
       fetchAll<Announcement>((a, b) => supabase.from('announcements').select('*').eq('status', 'published').order('published_at', { ascending: false }).range(a, b)),
@@ -56,8 +62,23 @@ export function Announcements() {
         sub={`Notices from ${settings?.company_name || 'the company'}. Announcements are informational and don't change your agreement.${nUnread ? ` ${nUnread} unread.` : ''}`}
         actions={nUnread ? <button className="btn" onClick={markAll}>Mark all as read</button> : undefined} />
       {q.error && <ErrorNote msg={q.error} retry={q.reload} />}
+      {bros.length > 0 && (
+        <div className="card">
+          <div className="card-h"><h3>Brochures</h3><div className="r">{bros.length} current</div></div>
+          <div className="card-b list">
+            {bros.map(b => (
+              <div key={b.id} style={{ cursor: 'pointer' }} onClick={() => setBro(b)} role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'Enter') setBro(b); }}>
+                <Icon name="brochure" />
+                <div className="grow"><b>{b.title}</b><span>{b.plan_name ? b.plan_name + ' · ' : ''}Published {date(b.publish_on)}{b.description ? ' · ' + b.description.slice(0, 90) : ''}</span></div>
+                {!b.acknowledged && <Badge cls="b-blue">New</Badge>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {bro && <BrochureModal b={bro} onClose={() => setBro(null)} />}
       {q.loading && !q.data ? <Loading /> : q.data && !anns.length ? (
-        <div className="card"><div className="card-b"><Empty title="No announcements yet">Notices from the company will appear here.</Empty></div></div>
+        bros.length ? null : <div className="card"><div className="card-b"><Empty title="No announcements yet">Notices and brochures from the company will appear here.</Empty></div></div>
       ) : anns.map(a => {
         const u = unread(a);
         return (

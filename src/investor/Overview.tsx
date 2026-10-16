@@ -2,25 +2,29 @@ import { Link, useNavigate } from 'react-router-dom';
 import { supabase, must } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
 import { useQuery } from '../lib/useQuery';
-import { date, dateShort, LEDGER_TYPE, money, moneyShort, rate, today } from '../lib/format';
+import { date, dateShort, isUnlocked, LEDGER_TYPE, lockinText, money, moneyShort, rate, today } from '../lib/format';
 import { Empty, ErrorNote, Kpi, LedgerBadge, Loading, PageHead } from '../ui/kit';
 import { BarChart, monthLabel } from '../ui/Charts';
 import { Icon } from '../ui/Icon';
 import type { Announcement, LedgerEntry } from '../lib/types';
-import { addDays, bal, codeMap, daysLeft, isLive, lastMonths, loadPortfolio, nextAccrual, projectedRemaining, unpaid } from './data';
+import { addDays, bal, codeMap, isLive, lastMonths, loadPortfolio, nextAccrual, unpaid } from './data';
 import { Tracker } from './parts';
+import { loadMyBrochures } from './Brochures';
+import { loadProperties, PropertyGrid } from './Properties';
 
 export function Overview() {
-  const { profile } = useAuth();
+  const { profile, settings } = useAuth();
   const nav = useNavigate();
   const id = profile!.id;
   const q = useQuery(async () => {
-    const [p, led, ann] = await Promise.all([
+    const [p, led, ann, bros, props] = await Promise.all([
       loadPortfolio(id),
       supabase.from('ledger_entries').select('*').eq('investor_id', id).order('occurred_on', { ascending: false }).order('created_at', { ascending: false }).limit(6),
-      supabase.from('announcements').select('id,code,title,category,published_at').eq('status', 'published').order('published_at', { ascending: false }).limit(4)
+      supabase.from('announcements').select('id,code,title,category,published_at').eq('status', 'published').order('published_at', { ascending: false }).limit(4),
+      loadMyBrochures(),
+      loadProperties()
     ]);
-    return { p, ledger: must(led) as LedgerEntry[], anns: must(ann) as Pick<Announcement, 'id' | 'code' | 'title' | 'category' | 'published_at'>[] };
+    return { p, ledger: must(led) as LedgerEntry[], anns: must(ann) as Pick<Announcement, 'id' | 'code' | 'title' | 'category' | 'published_at'>[], bros, props };
   }, [id]);
 
   const first = (profile!.full_name || '').trim().split(/\s+/)[0] || 'there';
@@ -29,16 +33,26 @@ export function Overview() {
   if (q.loading && !q.data) return <><PageHead crumbs={['Overview']} title={`Welcome back, ${first}`} /><Loading /></>;
   if (q.error || !q.data) return <><PageHead crumbs={['Overview']} title={`Welcome back, ${first}`} /><ErrorNote msg={q.error || 'Could not load your portfolio.'} retry={q.reload} /></>;
 
-  const { p, ledger, anns } = q.data;
+  const { p, ledger, anns, bros, props } = q.data;
   const inv = p.investments;
   const live = inv.filter(isLive);
   const earning = live.filter(i => i.status === 'active');
   const principal = live.reduce((s, i) => s + Number(i.principal), 0);
+  const unlockedInv = live.filter(i => isUnlocked(i, t));
+  const unlocked = unlockedInv.reduce((s, i) => s + Number(i.principal), 0);
+  const locked = principal - unlocked;
+  const totalReturns = inv.reduce((s, i) => s + Number(bal(p, i.id).accrued), 0);
+  const siteUrl = settings?.property_site_url || 'https://parvarealty.ae/';
+  const showProps = unlocked > 0 || settings?.show_properties_to !== 'unlocked';
+  // published brochures and announcements together, newest first
+  const updates = [
+    ...bros.map(b => ({ key: 'b' + b.id, title: b.title, tag: 'Brochure', when: b.publish_on, unread: !b.acknowledged, go: () => nav('/portal?brochure=' + b.id) })),
+    ...anns.map(a => ({ key: 'a' + a.id, title: a.title, tag: a.category, when: a.published_at || '', unread: false, go: () => nav('/portal/announcements?open=' + a.id) }))
+  ].sort((a, b) => b.when.localeCompare(a.when)).slice(0, 5);
   const monthly = earning.reduce((s, i) => s + Number(i.monthly_return), 0);
   const paid = inv.reduce((s, i) => s + Number(bal(p, i.id).paid), 0);
   const notPaid = inv.reduce((s, i) => s + unpaid(bal(p, i.id)), 0);
   const processing = inv.reduce((s, i) => s + Number(bal(p, i.id).processing), 0);
-  const projected = earning.reduce((s, i) => s + projectedRemaining(i, bal(p, i.id)), 0);
 
   // Next payout: earliest of a payout already due (real row) or the next scheduled accrual + payout lag (projection).
   type Cand = { date: string; amount: number; scheduled: boolean };
@@ -51,7 +65,7 @@ export function Overview() {
   const nextAmt = nextGroup.reduce((s, c) => s + c.amount, 0);
   const nextScheduled = nextGroup.some(c => c.scheduled);
 
-  const nextMat = live.filter(i => i.maturity_date && i.maturity_date >= t).sort((a, b) => a.maturity_date!.localeCompare(b.maturity_date!))[0];
+  const nextMat = live.filter(i => i.lockin_end_date && i.lockin_end_date > t).sort((a, b) => a.lockin_end_date!.localeCompare(b.lockin_end_date!))[0];
   const codes = codeMap(inv);
 
   // Monthly returns by accrual month, split by payout status (last 7 months).
@@ -71,16 +85,30 @@ export function Overview() {
       ) : (
         <>
           <div className="kpis k4">
-            <Kpi label="Total principal invested" value={money(principal)} sub={`${live.length} live investment${live.length === 1 ? '' : 's'}`} tip="The amount you invested in investments that are live today. It does not include returns." />
+            <Kpi label="Total principal invested" value={money(principal)} sub={`${live.length} live investment${live.length === 1 ? '' : 's'} · view details`} onClick={() => nav('/portal/investments')}
+              tip="The amount you invested in investments that are live today. It does not include returns." />
+            <Kpi label="Unlocked principal" value={money(unlocked)} cls={unlocked ? 'pos' : ''} sub={`${unlockedInv.length} investment${unlockedInv.length === 1 ? '' : 's'} past lock-in`} onClick={() => nav('/portal/investments?view=unlocked')}
+              tip="Principal of investments whose lock-in period has ended. It is a status only: it is not a return and is not paid out or reinvested automatically." />
+            <Kpi label="Locked principal" value={money(locked)} sub={nextMat ? `Next unlocks ${date(nextMat.lockin_end_date)}` : 'Nothing in lock-in'} onClick={() => nav('/portal/investments?view=locked')}
+              tip="Principal of investments still inside their 6-month or 1-year lock-in." />
+            <Kpi label="Total returns" value={money(totalReturns)} sub={`${money(paid)} received`} onClick={() => nav('/portal/returns')}
+              tip="All monthly returns earned so far (accrued), whether paid or not. Open to see every month." />
             <Kpi label="Monthly return" value={money(monthly)} sub={`Across ${earning.length} earning investment${earning.length === 1 ? '' : 's'}`} tip="The sum of the fixed monthly return in each agreement that is still earning." />
             <Kpi label="Returns received" value={money(paid)} cls="pos" sub="Confirmed payments only" tip="Returns the company has paid and confirmed with a bank reference." />
             <Kpi label="Accrued, not yet paid" value={money(notPaid)} sub={processing ? money(processing) + ' being processed' : 'Awaiting payout'} subCls="warn" tip="Returns earned for completed months that have not been confirmed as paid yet. This is not money in your account." />
             <Kpi label="Next expected payout" value={nextDate ? money(nextAmt) : '—'} sub={nextDate ? (nextScheduled ? 'Scheduled · ' : 'Due · ') + date(nextDate) : 'No payouts scheduled'}
               tip="A payout already due, or the next scheduled month from your contract terms. Scheduled amounts become an accrual on the accrual date and are paid after confirmation." />
-            <Kpi label="Next maturity" value={nextMat ? date(nextMat.maturity_date) : '—'} sub={nextMat ? `${nextMat.code} · ${daysLeft(nextMat)} days` : 'No upcoming maturity'} tip="The earliest maturity date across your live investments." />
-            <Kpi label="Live investments" value={String(live.length)} sub={`${inv.length} in total`} />
-            <Kpi label="Projected remaining returns" value={money(projected)} sub="Projected · not guaranteed" subCls="warn" tip="Remaining monthly returns until maturity at your contract rate, assuming nothing changes. This is an estimate." />
           </div>
+
+          {unlocked > 0 && (
+            <div className="card explore">
+              <div className="card-h"><h3>Explore Properties with Parva Realty</h3><div className="r"><Link to="/portal/properties">View all</Link></div></div>
+              <div className="card-b" style={{ display: 'grid', gap: 14 }}>
+                <p className="hint">Your lock-in has ended on {money(unlocked)} of principal. If you are interested in property, here is what Parva Realty currently lists. Viewing a property does not move or reinvest your principal.</p>
+                <PropertyGrid items={props} siteUrl={siteUrl} limit={3} />
+              </div>
+            </div>
+          )}
 
           <div className="inv-cards">
             {inv.filter(i => i.status !== 'cancelled').map(i => {
@@ -91,7 +119,7 @@ export function Overview() {
                   <div className="card-b" style={{ display: 'grid', gap: 14 }}>
                     <div>
                       <div className="num" style={{ fontSize: 24, fontWeight: 700 }}>{money(i.principal)}</div>
-                      <div className="hint">{rate(i.monthly_rate)} · {i.lockin_months}-month lock-in</div>
+                      <div className="hint">{rate(i.monthly_rate)} · {lockinText(i.lockin_months)} lock-in</div>
                     </div>
                     <Tracker i={i} compact />
                     <dl className="kv">
@@ -124,13 +152,14 @@ export function Overview() {
             <div className="card">
               <div className="card-h"><h3>Latest announcements</h3><div className="r"><Link to="/portal/announcements">All</Link></div></div>
               <div className="card-b list">
-                {anns.map(a => (
-                  <div key={a.id} style={{ cursor: 'pointer' }} onClick={() => nav('/portal/announcements?open=' + a.id)}>
-                    <Icon name="announce" />
-                    <div className="grow"><b>{a.title}</b><span>{a.category} · {dateShort(a.published_at)}</span></div>
+                {updates.map(u => (
+                  <div key={u.key} style={{ cursor: 'pointer' }} onClick={u.go} role="link" tabIndex={0} onKeyDown={e => { if (e.key === 'Enter') u.go(); }}>
+                    <Icon name={u.tag === 'Brochure' ? 'brochure' : 'announce'} />
+                    <div className="grow"><b>{u.title}</b><span>{u.tag} · {dateShort(u.when)}</span></div>
+                    {u.unread && <span className="dot unread" aria-label="New" />}
                   </div>
                 ))}
-                {!anns.length && <Empty title="No announcements yet">Notices from the company will appear here.</Empty>}
+                {!updates.length && <Empty title="No announcements yet">Brochures and notices from the company will appear here.</Empty>}
               </div>
             </div>
           </div>
@@ -155,7 +184,13 @@ export function Overview() {
               ) : <div className="card-b"><Empty title="No activity yet">Deposits, returns and payouts will be listed here.</Empty></div>}
             </div>
           </div>
-          <p className="hint">Rates are contractual monthly rates under your agreement. Scheduled and projected values are estimates and are not guaranteed.</p>
+          {unlocked === 0 && showProps && (
+            <div className="card">
+              <div className="card-h"><h3>Explore Properties with Parva Realty</h3><div className="r"><Link to="/portal/properties">View all</Link></div></div>
+              <div className="card-b"><PropertyGrid items={props} siteUrl={siteUrl} limit={3} /></div>
+            </div>
+          )}
+          <p className="hint">Rates are contractual monthly rates under your agreement. Scheduled values are estimates and are not guaranteed.</p>
         </>
       )}
     </>

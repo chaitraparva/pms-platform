@@ -11,7 +11,8 @@ const AREAS: Record<string, string[]> = {
   plans: ['plan.'],
   investments: ['investment.', 'accrual.', 'job.'],
   payouts: ['payout.'],
-  redemptions: ['redemption.'],
+  branches: ['branch.', 'investor.branch'],
+  content: ['brochure.', 'property.', 'announcement.'],
   people: ['investor.', 'user.', 'admin.'],
   settings: ['settings.'],
   announcements: ['announcement.']
@@ -49,11 +50,11 @@ export function Audit() {
       {!q.data && !q.error ? <Loading /> : q.data && (
         <DataTable rows={rows} cols={cols} rowKey={r => String(r.id)} href={r => '/admin/audit?id=' + r.id}
           searchPh="Search actor, action, record, reason"
-          filters={[['All', 'all'], ['Plans', 'plans'], ['Investments', 'investments'], ['Payouts', 'payouts'], ['Redemptions', 'redemptions'], ['Investors & users', 'people'], ['Settings', 'settings'], ['Announcements', 'announcements']]}
+          filters={[['All', 'all'], ['Plans', 'plans'], ['Investments', 'investments'], ['Payouts', 'payouts'], ['Branches', 'branches'], ['Brochures & properties', 'content'], ['Investors & users', 'people'], ['Settings', 'settings'], ['Announcements', 'announcements']]}
           filterFn={(r, f) => f === 'all' || inArea(r.action, f)}
           sort={0} dir={-1} per={20}
           emptyTitle={rows.length ? 'No matching entries' : 'No audit entries yet'}
-          empty={rows.length ? 'No audit entries match these filters.' : 'Entries are recorded automatically whenever an admin changes settings, plans, investors, investments, payouts or redemptions.'} />
+          empty={rows.length ? 'No audit entries match these filters.' : 'Entries are recorded automatically whenever an admin changes settings, plans, investors, investments, payouts, branches, brochures or properties.'} />
       )}
       {id && q.data && (
         <Drawer title={open ? open.action : 'Audit entry'} sub={open ? `${dateTime(open.at)} · ${open.actor_name || 'System'}` : undefined} onClose={close}

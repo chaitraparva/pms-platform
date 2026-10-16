@@ -41,3 +41,41 @@ export async function uploadLogo(file: File): Promise<string> {
   if (error) throw new Error(friendly(error.message));
   return supabase.storage.from('branding').getPublicUrl(path).data.publicUrl;
 }
+
+/* ---------- brochures (private bucket "brochures") ---------- */
+export const BROCHURE_TYPES = ['application/pdf', 'image/png', 'image/jpeg', 'image/webp'];
+
+/** Admin: upload a brochure file; returns the storage details to save with the brochure. */
+export async function uploadBrochureFile(file: File): Promise<{ storage_path: string; file_name: string; mime: string; size_bytes: number }> {
+  if (!BROCHURE_TYPES.includes(file.type)) throw new Error('Choose a PDF, PNG, JPG or WebP file.');
+  if (file.size > 15 * 1024 * 1024) throw new Error('Brochures must be 15 MB or smaller.');
+  const path = `${new Date().getFullYear()}/${crypto.randomUUID()}-${safe(file.name)}`;
+  const { error } = await supabase.storage.from('brochures').upload(path, file, { contentType: file.type, upsert: false });
+  if (error) throw new Error(friendly(error.message));
+  return { storage_path: path, file_name: file.name, mime: file.type, size_bytes: file.size };
+}
+
+/** A short-lived signed link to a brochure (only works for brochures the signed-in user may see). */
+export async function brochureUrl(path: string, seconds = 600): Promise<string> {
+  const { data, error } = await supabase.storage.from('brochures').createSignedUrl(path, seconds);
+  if (error || !data) throw new Error(friendly(error?.message || 'Brochure not available.'));
+  return data.signedUrl;
+}
+
+export async function openBrochure(path: string): Promise<void> {
+  const w = window.open('', '_blank');
+  try {
+    const url = await brochureUrl(path, 120);
+    if (w) w.location.href = url; else window.location.href = url;
+  } catch (e) { w?.close(); throw e; }
+}
+
+/** Admin: upload a property photo to the public branding bucket (marketing images only); returns its public URL. */
+export async function uploadPropertyImage(file: File): Promise<string> {
+  if (!/^image\/(png|jpeg|webp)$/.test(file.type)) throw new Error('Choose a PNG, JPG or WebP image.');
+  if (file.size > 5 * 1024 * 1024) throw new Error('Images must be 5 MB or smaller.');
+  const path = `properties/${Date.now()}-${safe(file.name)}`;
+  const { error } = await supabase.storage.from('branding').upload(path, file, { contentType: file.type, upsert: false });
+  if (error) throw new Error(friendly(error.message));
+  return supabase.storage.from('branding').getPublicUrl(path).data.publicUrl;
+}

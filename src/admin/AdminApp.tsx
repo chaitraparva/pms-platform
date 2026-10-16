@@ -10,7 +10,9 @@ import { Plans, PlanDetail } from './Plans';
 import { Investments, InvestmentDetail } from './Investments';
 import { Accruals } from './Accruals';
 import { Payouts } from './Payouts';
-import { Redemptions } from './Redemptions';
+import { Branches, BranchDetail } from './Branches';
+import { Brochures } from './Brochures';
+import { Properties } from './Properties';
 import { Transactions } from './Transactions';
 import { Announcements } from './Announcements';
 import { Reports } from './Reports';
@@ -21,19 +23,18 @@ import { Search } from './Search';
 export default function AdminApp() {
   const nav = useNavigate();
   const counts = useQuery(async () => {
-    const [p, r] = await Promise.all([
-      supabase.from('payouts').select('id', { count: 'exact', head: true }).in('status', ['approved', 'processing', 'failed']),
-      supabase.from('redemption_requests').select('id', { count: 'exact', head: true }).in('status', ['requested', 'under_review'])
-    ]);
-    return { payouts: p.count || 0, redemptions: r.count || 0 };
+    const p = await supabase.from('payouts').select('id', { count: 'exact', head: true }).in('status', ['approved', 'processing', 'failed']);
+    return { payouts: p.count || 0 };
   }, []);
   const items: NavItem[] = [
     { group: 'Dashboard' }, { to: '/admin', label: 'Overview', icon: 'home' },
+    { to: '/admin/branches', label: 'Branches', icon: 'branch' },
     { group: 'Manage' }, { to: '/admin/investors', label: 'Investors', icon: 'users' }, { to: '/admin/plans', label: 'Investment Plans', icon: 'plans' },
     { to: '/admin/investments', label: 'Investments', icon: 'invest' }, { to: '/admin/accruals', label: 'Monthly ROI & Accruals', icon: 'roi' },
-    { to: '/admin/payouts', label: 'Payouts', icon: 'payout', count: counts.data?.payouts }, { to: '/admin/redemptions', label: 'Redemptions', icon: 'redeem', count: counts.data?.redemptions },
+    { to: '/admin/payouts', label: 'Payouts', icon: 'payout', count: counts.data?.payouts },
     { to: '/admin/transactions', label: 'Transactions', icon: 'txn' },
-    { group: 'Communicate & control' }, { to: '/admin/announcements', label: 'Announcements', icon: 'announce' }, { to: '/admin/reports', label: 'Reports', icon: 'report' },
+    { group: 'Communicate & control' }, { to: '/admin/announcements', label: 'Announcements', icon: 'announce' },
+    { to: '/admin/brochures', label: 'Brochures', icon: 'brochure' }, { to: '/admin/properties', label: 'Parva Properties', icon: 'building' }, { to: '/admin/reports', label: 'Reports', icon: 'report' },
     { to: '/admin/audit', label: 'Audit Logs', icon: 'audit' }, { to: '/admin/settings', label: 'Settings', icon: 'settings' }
   ];
   return (
@@ -48,8 +49,10 @@ export default function AdminApp() {
         <Route path="investments/:code" element={<InvestmentDetail />} />
         <Route path="accruals" element={<Accruals />} />
         <Route path="payouts" element={<Payouts />} />
-        <Route path="redemptions" element={<Redemptions />} />
-        <Route path="redemptions/:code" element={<Redemptions />} />
+        <Route path="branches" element={<Branches />} />
+        <Route path="branches/:code" element={<BranchDetail />} />
+        <Route path="brochures" element={<Brochures />} />
+        <Route path="properties" element={<Properties />} />
         <Route path="transactions" element={<Transactions />} />
         <Route path="announcements" element={<Announcements />} />
         <Route path="reports" element={<Reports />} />

@@ -24,6 +24,8 @@ interface Props<T> {
   text?: (r: T) => string;
   filters?: [string, string][];
   filterFn?: (r: T, f: string) => boolean;
+  /** filter chip selected on first render (defaults to the first one) */
+  initialFilter?: string;
   sort?: number;
   dir?: 1 | -1;
   per?: number;
@@ -37,7 +39,7 @@ interface Props<T> {
 export function DataTable<T>(p: Props<T>) {
   const nav = useNavigate();
   const [q, setQ] = useState('');
-  const [filter, setFilter] = useState(p.filters ? p.filters[0][1] : '');
+  const [filter, setFilter] = useState(p.initialFilter && p.filters?.some(f => f[1] === p.initialFilter) ? p.initialFilter : p.filters ? p.filters[0][1] : '');
   const [sort, setSort] = useState<number | null>(p.sort ?? null);
   const [dir, setDir] = useState<1 | -1>(p.dir ?? -1);
   const [page, setPage] = useState(0);

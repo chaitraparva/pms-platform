@@ -11,10 +11,9 @@ import { codeMap, loadInvestments, loadLedger } from './data';
 
 interface Row extends LedgerEntry { inv: string; typeLabel: string }
 
-const FILTERS: [string, string][] = [['All', 'all'], ['Deposits', 'deposit'], ['Return payouts', 'return_payout'], ['Accruals', 'return_accrual'], ['Redemptions', 'red'], ['Fees & adjustments', 'adj']];
+const FILTERS: [string, string][] = [['All', 'all'], ['Deposits', 'deposit'], ['Return payouts', 'return_payout'], ['Accruals', 'return_accrual'], ['Principal & adjustments', 'adj']];
 const match = (r: Row, f: string) => f === 'all' || r.type === f
-  || (f === 'red' && ['redemption_request', 'principal_redemption'].includes(r.type))
-  || (f === 'adj' && ['fee', 'adjustment', 'reversal', 'refund'].includes(r.type));
+  || (f === 'adj' && ['fee', 'adjustment', 'reversal', 'refund', 'redemption_request', 'principal_redemption'].includes(r.type));
 
 export function Transactions() {
   const { profile } = useAuth();

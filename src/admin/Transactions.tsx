@@ -16,8 +16,7 @@ const GROUPS: Record<string, string[]> = {
   dep: ['deposit', 'allocation'],
   acc: ['return_accrual'],
   pay: ['return_payout'],
-  red: ['redemption_request', 'principal_redemption'],
-  adj: ['fee', 'adjustment', 'reversal', 'refund']
+  adj: ['fee', 'adjustment', 'reversal', 'refund', 'redemption_request', 'principal_redemption']
 };
 const nameOf = (p?: Person) => (p ? p.full_name || p.email : '');
 
@@ -70,7 +69,7 @@ export function Transactions() {
       {!q.data && !q.error ? <Loading /> : q.data && (
         <DataTable rows={rows} cols={cols} rowKey={r => r.id} searchPh="Search ID, investment, investor, reference"
           text={r => `${r.investor?.code || ''} ${r.investor?.email || ''}`}
-          filters={[['All', 'all'], ['Deposits', 'dep'], ['Returns accrued', 'acc'], ['Return payouts', 'pay'], ['Redemptions', 'red'], ['Fees & adjustments', 'adj']]}
+          filters={[['All', 'all'], ['Deposits', 'dep'], ['Returns accrued', 'acc'], ['Return payouts', 'pay'], ['Principal, fees & adjustments', 'adj']]}
           filterFn={(r, f) => f === 'all' || (GROUPS[f] || []).includes(r.type)}
           sort={1} dir={-1} per={20}
           tools={<>
@@ -79,7 +78,7 @@ export function Transactions() {
             {(from || to) && <button className="btn ghost sm" onClick={() => { setFrom(''); setTo(''); }}>Clear dates</button>}
           </>}
           emptyTitle={all.length ? 'No matching entries' : 'The ledger is empty'}
-          empty={all.length ? 'No ledger entries match these filters or dates.' : 'Entries are posted automatically when you record an investment, confirm a deposit, accrue returns, pay out or settle a redemption.'} />
+          empty={all.length ? 'No ledger entries match these filters or dates.' : 'Entries are posted automatically when you record an investment, confirm a deposit, accrue returns or pay out.'} />
       )}
     </>
   );

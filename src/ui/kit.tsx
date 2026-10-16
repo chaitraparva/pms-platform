@@ -1,13 +1,12 @@
-import { ButtonHTMLAttributes, createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { ButtonHTMLAttributes, createContext, KeyboardEvent as ReactKeyboardEvent, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
-import { INV_BADGE, LEDGER_BADGE, PAY_BADGE, REDEMPTION_BADGE, investmentLabel } from '../lib/format';
+import { INV_BADGE, LEDGER_BADGE, PAY_BADGE, investmentLabel } from '../lib/format';
 import type { Investment } from '../lib/types';
 
 /* ---------- badges, tips, KPI tiles ---------- */
 export const Badge = ({ cls, children }: { cls: string; children: ReactNode }) => <span className={'badge ' + cls}>{children}</span>;
 export const PayBadge = ({ s }: { s: string }) => <Badge cls={(PAY_BADGE[s] || [s, 'b-grey'])[1]}>{(PAY_BADGE[s] || [s])[0]}</Badge>;
 export const LedgerBadge = ({ s }: { s: string }) => <Badge cls={(LEDGER_BADGE[s] || [s, 'b-grey'])[1]}>{(LEDGER_BADGE[s] || [s])[0]}</Badge>;
-export const RedBadge = ({ s }: { s: string }) => <Badge cls={(REDEMPTION_BADGE[s] || [s, 'b-grey'])[1]}>{(REDEMPTION_BADGE[s] || [s])[0]}</Badge>;
 export const InvBadge = ({ i, approachingDays }: { i: Investment; approachingDays: number }) => {
   const l = investmentLabel(i, approachingDays);
   return <Badge cls={INV_BADGE[l] || 'b-grey'}>{l}</Badge>;
@@ -17,12 +16,14 @@ export const KycBadge = ({ k }: { k: string }) =>
 export const AcctBadge = ({ s }: { s: string }) => (s === 'active' ? <Badge cls="b-blue">Active</Badge> : <Badge cls="b-red">Suspended</Badge>);
 export const Tip = ({ t }: { t: string }) => <span className="tip" tabIndex={0} data-tip={t}>i</span>;
 
-export function Kpi({ label, value, sub, tip, cls, subCls }: { label: string; value: ReactNode; sub?: ReactNode; tip?: string; cls?: string; subCls?: string }) {
+export function Kpi({ label, value, sub, tip, cls, subCls, onClick }: { label: string; value: ReactNode; sub?: ReactNode; tip?: string; cls?: string; subCls?: string; onClick?: () => void }) {
+  const click = onClick ? { onClick, role: 'link', tabIndex: 0, onKeyDown: (e: ReactKeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } } : {};
   return (
-    <div className="kpi">
+    <div className={'kpi' + (onClick ? ' click' : '')} {...click}>
       <div className="kpi-l">{label}{tip && <Tip t={tip} />}</div>
       <div className={'kpi-v ' + (cls || '')} title={typeof value === 'string' ? value : undefined}>{value}</div>
       {sub != null && sub !== '' && <div className={'kpi-s ' + (subCls || '')}>{sub}</div>}
+      {onClick && <span className="kpi-go" aria-hidden="true">›</span>}
     </div>
   );
 }
@@ -110,13 +111,13 @@ export function Drawer({ title, sub, onClose, children, foot }: { title: string;
     </>
   );
 }
-export function Modal({ title, sub, onClose, children, foot }: { title: string; sub?: ReactNode; onClose: () => void; children?: ReactNode; foot: ReactNode }) {
+export function Modal({ title, sub, onClose, children, foot, wide }: { title: string; sub?: ReactNode; onClose: () => void; children?: ReactNode; foot: ReactNode; wide?: boolean }) {
   useEscape(onClose);
   return (
     <>
       <div className="scrim" onClick={onClose} />
-      <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
-        <div className="mh"><h3>{title}</h3>{sub && <p className="hint">{sub}</p>}</div>
+      <div className={'modal' + (wide ? ' wide' : '')} role="dialog" aria-modal="true" aria-label={title}>
+        <div className="mh">{wide && <button className="x" onClick={onClose} aria-label="Close">×</button>}<h3>{title}</h3>{sub && <p className="hint">{sub}</p>}</div>
         {children && <div className="mb">{children}</div>}
         <div className="mf">{foot}</div>
       </div>

@@ -1,70 +1,117 @@
 import { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { supabase, must } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
 import { useQuery } from '../lib/useQuery';
 import { openDocument } from '../lib/docs';
-import { date, dateShort, EARLY_LABEL, addMonths, money, ordinal, pct, rate, today } from '../lib/format';
-import { Badge, Empty, ErrorNote, InvBadge, Kpi, Loading, PageHead, PayBadge, useAction } from '../ui/kit';
+import { date, dateShort, addMonths, investmentLabel, isUnlocked, LEDGER_TYPE, lockinText, money, ordinal, pct, rate, rateShort } from '../lib/format';
+import { Badge, Empty, ErrorNote, InvBadge, Kpi, LedgerBadge, Loading, PageHead, PayBadge, useAction } from '../ui/kit';
 import { DataTable } from '../ui/DataTable';
 import { Icon } from '../ui/Icon';
 import type { Accrual, DocumentRow, Investment, Payout } from '../lib/types';
-import { addDays, bal, daysLeft, loadPortfolio, nextAccrual, projectedRemaining, unpaid } from './data';
-import { BackLink, earlyRule, maturityText, Prose, Steps, Tracker, useApproaching } from './parts';
+import { addDays, bal, codeMap, daysLeft, isLive, loadLedger, loadPortfolio, nextAccrual, projectedRemaining, unpaid } from './data';
+import { BackLink, maturityText, Prose, Steps, Tracker, useApproaching } from './parts';
+
+const VIEWS: [string, string][] = [['All', 'all'], ['Unlocked', 'unlocked'], ['Locked', 'locked'], ['Pending funding', 'pending_funding'], ['Closed', 'closed']];
+const inView = (i: Investment, f: string) => f === 'all' || (f === 'unlocked' ? isUnlocked(i) : f === 'locked' ? isLive(i) && !isUnlocked(i)
+  : f === 'closed' ? ['redeemed', 'cancelled'].includes(i.status) : i.status === f);
 
 export function Investments() {
   const { profile } = useAuth();
   const approaching = useApproaching();
-  const [view, setView] = useState<'table' | 'cards'>('table');
+  const [sp, setSp] = useSearchParams();
+  const view = VIEWS.some(v => v[1] === sp.get('view')) ? sp.get('view')! : 'all';
+  const [layout, setLayout] = useState<'table' | 'cards'>('table');
   const nav = useNavigate();
-  const q = useQuery(() => loadPortfolio(profile!.id), [profile?.id]);
+  const q = useQuery(async () => {
+    const [p, led] = await Promise.all([loadPortfolio(profile!.id), loadLedger(profile!.id)]);
+    return { ...p, history: led.filter(l => ['deposit', 'allocation', 'principal_redemption', 'refund'].includes(l.type)) };
+  }, [profile?.id]);
   const inv = q.data?.investments || [];
-  const total = inv.filter(i => !['cancelled', 'redeemed'].includes(i.status)).reduce((s, i) => s + Number(i.principal), 0);
+  const live = inv.filter(isLive);
+  const total = live.reduce((s, i) => s + Number(i.principal), 0);
+  const unlocked = live.filter(i => isUnlocked(i));
+  const unlockedSum = unlocked.reduce((s, i) => s + Number(i.principal), 0);
+  const shown = inv.filter(i => inView(i, view));
+  const codes = codeMap(inv);
+  const title = view === 'unlocked' ? 'Unlocked principal' : view === 'locked' ? 'Locked principal' : 'My investments';
+  const crumbs = view === 'unlocked' || view === 'locked' ? ['My Investments', title] : ['My Investments'];
 
   return (
     <>
-      <PageHead crumbs={['My Investments']} title="My investments" sub={q.data ? `${inv.length} investment${inv.length === 1 ? '' : 's'} · ${money(total)} principal not yet redeemed` : undefined}
+      {view !== 'all' && <BackLink to="/portal">Overview</BackLink>}
+      <PageHead crumbs={crumbs} title={title}
+        sub={q.data ? (view === 'unlocked'
+          ? `${unlocked.length} investment${unlocked.length === 1 ? '' : 's'} whose lock-in has ended · ${money(unlockedSum)}`
+          : view === 'locked' ? `${live.length - unlocked.length} investment${live.length - unlocked.length === 1 ? '' : 's'} still in lock-in · ${money(total - unlockedSum)}`
+          : `${inv.length} investment${inv.length === 1 ? '' : 's'} · ${money(total)} total principal invested`) : undefined}
         actions={inv.length ? <div className="chips">
-          <button className={'chip ' + (view === 'table' ? 'on' : '')} onClick={() => setView('table')}>Table</button>
-          <button className={'chip ' + (view === 'cards' ? 'on' : '')} onClick={() => setView('cards')}>Cards</button>
+          <button className={'chip ' + (layout === 'table' ? 'on' : '')} onClick={() => setLayout('table')}>Table</button>
+          <button className={'chip ' + (layout === 'cards' ? 'on' : '')} onClick={() => setLayout('cards')}>Cards</button>
         </div> : undefined} />
       {q.error && <ErrorNote msg={q.error} retry={q.reload} />}
+      {view === 'unlocked' && q.data && (
+        <div className="note info">Unlocked principal is the principal of investments whose lock-in period has ended. It stays recorded in your name. It is not a return, and it is not paid out or reinvested automatically.</div>
+      )}
       {q.loading && !q.data ? <Loading /> : q.data && !inv.length ? (
         <div className="card"><div className="card-b"><Empty title="You have no investments yet">Your advisor will record your investment once funds are received.</Empty></div></div>
-      ) : q.data && view === 'table' ? (
-        <DataTable rows={inv} rowKey={i => i.id} href={i => '/portal/investments/' + i.code} searchPh="Search by investment or plan" sort={4} per={20}
-          filters={[['All', 'all'], ['Live', 'live'], ['Pending funding', 'pending_funding'], ['Redeemed', 'redeemed']]}
-          filterFn={(i, f) => f === 'all' || (f === 'live' ? ['active', 'matured', 'redemption_requested', 'redemption_processing'].includes(i.status) : i.status === f)}
+      ) : q.data && layout === 'table' ? (
+        <DataTable key={view} rows={inv} rowKey={i => i.id} href={i => '/portal/investments/' + i.code} searchPh="Search by investment or plan" sort={1} per={20}
+          filters={VIEWS} filterFn={inView} initialFilter={view}
+          emptyTitle={view === 'unlocked' ? 'No unlocked principal yet' : 'Nothing here'}
+          empty={view === 'unlocked' ? 'An investment appears here once its lock-in period has ended.' : 'No investments match this filter.'}
           cols={[
-            { h: 'Investment', v: i => i.code, m: true },
-            { h: 'Plan', v: i => i.plan_name },
+            { h: 'Investment', v: i => i.code, m: true, r: i => <>{i.code}<span className="sub">{i.plan_name}</span></> },
+            { h: 'Investment date', v: i => i.start_date || i.expected_start || '', r: i => <>{date(i.start_date || i.expected_start)}{!i.start_date && i.expected_start && <span className="sub">expected</span>}</> },
             { h: 'Principal', n: true, v: i => Number(i.principal), r: i => money(i.principal) },
-            { h: 'Monthly ROI', v: i => Number(i.monthly_rate), r: i => rate(i.monthly_rate) },
-            { h: 'Start', v: i => i.start_date || i.expected_start || '', r: i => date(i.start_date || i.expected_start) },
-            { h: 'Lock-in', v: i => i.lockin_months, r: i => `${i.lockin_months} months` },
-            { h: 'Maturity', v: i => i.maturity_date || '', r: i => date(i.maturity_date) },
+            { h: 'Monthly ROI', v: i => Number(i.monthly_rate), r: i => rateShort(i.monthly_rate) },
+            { h: 'Lock-in', v: i => i.lockin_months, r: i => lockinText(i.lockin_months) },
+            { h: 'Maturity date', v: i => i.maturity_date || '', r: i => date(i.maturity_date) },
             { h: 'Days left', n: true, v: i => (i.maturity_date ? daysLeft(i) : null), r: i => (i.maturity_date ? String(daysLeft(i)) : '—') },
             { h: 'Accrued', n: true, v: i => Number(bal(q.data!, i.id).accrued), r: i => money(bal(q.data!, i.id).accrued) },
             { h: 'Paid', n: true, v: i => Number(bal(q.data!, i.id).paid), r: i => <span className="pos">{money(bal(q.data!, i.id).paid)}</span> },
-            { h: 'Status', v: i => i.status, r: i => <InvBadge i={i} approachingDays={approaching} /> }
+            { h: 'Status', v: i => investmentLabel(i, approaching), r: i => <InvBadge i={i} approachingDays={approaching} /> }
           ]} />
       ) : q.data ? (
-        <div className="inv-cards">
-          {inv.map(i => {
-            const b = bal(q.data!, i.id);
-            return (
-              <div key={i.id} className="card" style={{ cursor: 'pointer' }} onClick={() => nav('/portal/investments/' + i.code)}>
-                <div className="card-h"><h3 className="mono">{i.code}</h3><div className="r"><InvBadge i={i} approachingDays={approaching} /></div></div>
-                <div className="card-b" style={{ display: 'grid', gap: 14 }}>
-                  <div><div className="num" style={{ fontSize: 24, fontWeight: 700 }}>{money(i.principal)}</div><div className="hint">{i.plan_name} · {rate(i.monthly_rate)} · {i.lockin_months}-month lock-in</div></div>
-                  <Tracker i={i} compact />
-                  <dl className="kv"><dt>Monthly return</dt><dd>{money(i.monthly_return)}</dd><dt>Accrued</dt><dd>{money(b.accrued)}</dd><dt>Received</dt><dd className="pos">{money(b.paid)}</dd></dl>
+        <>
+          <div className="chips" style={{ marginBottom: 12 }}>
+            {VIEWS.map(v => <button key={v[1]} className={'chip ' + (view === v[1] ? 'on' : '')} onClick={() => setSp(v[1] === 'all' ? {} : { view: v[1] })}>{v[0]}</button>)}
+          </div>
+          {!shown.length && <div className="card"><div className="card-b"><Empty title="Nothing here">No investments match this filter.</Empty></div></div>}
+          <div className="inv-cards">
+            {shown.map(i => {
+              const b = bal(q.data!, i.id);
+              return (
+                <div key={i.id} className="card" style={{ cursor: 'pointer' }} onClick={() => nav('/portal/investments/' + i.code)}>
+                  <div className="card-h"><h3 className="mono">{i.code}</h3><div className="r"><InvBadge i={i} approachingDays={approaching} /></div></div>
+                  <div className="card-b" style={{ display: 'grid', gap: 14 }}>
+                    <div><div className="num" style={{ fontSize: 24, fontWeight: 700 }}>{money(i.principal)}</div><div className="hint">{i.plan_name} · {rate(i.monthly_rate)} · {lockinText(i.lockin_months)} lock-in</div></div>
+                    <Tracker i={i} compact />
+                    <dl className="kv"><dt>Monthly return</dt><dd>{money(i.monthly_return)}</dd><dt>Accrued</dt><dd>{money(b.accrued)}</dd><dt>Received</dt><dd className="pos">{money(b.paid)}</dd></dl>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </>
       ) : null}
+      {q.data && view === 'all' && q.data.history.length > 0 && (
+        <div className="card">
+          <div className="card-h"><h3>Investment history</h3><div className="r"><Link to="/portal/transactions">All transactions</Link></div></div>
+          <div className="tbl"><table>
+            <thead><tr><th>Date</th><th>Event</th><th>Investment</th><th className="n">Amount</th><th>Status</th><th>Reference</th></tr></thead>
+            <tbody>
+              {q.data.history.map(l => (
+                <tr key={l.id}>
+                  <td>{date(l.occurred_on)}</td><td>{LEDGER_TYPE[l.type] || l.type}{l.note && <span className="sub">{l.note}</span>}</td>
+                  <td className="m">{l.investment_id ? <Link to={'/portal/investments/' + codes[l.investment_id]}>{codes[l.investment_id]}</Link> : '—'}</td>
+                  <td className="n">{money(l.amount)}</td><td><LedgerBadge s={l.status} /></td><td className="m">{l.reference || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+        </div>
+      )}
     </>
   );
 }
@@ -111,12 +158,9 @@ export function InvestmentDetail() {
   );
   const { p, docs } = q.data;
   const b = bal(p, i.id);
-  const t = today();
   const rows = schedule(i, p.accruals, p.payouts);
   const next = nextAccrual(i, b);
-  const open = ['active', 'matured'].includes(i.status);
-  const canRequest = open && !!i.request_from_date && t >= i.request_from_date;
-  const canEarly = open && !canRequest && i.early_redemption !== 'not_permitted';
+  const unlocked = isUnlocked(i);
   const left = daysLeft(i);
   const stub = p.accruals.filter(a => a.investment_id === i.id && a.kind === 'stub');
 
@@ -124,11 +168,7 @@ export function InvestmentDetail() {
     <>
       <BackLink to="/portal/investments">My investments</BackLink>
       <PageHead crumbs={['My Investments', i.code]} title={i.code}
-        actions={<>
-          <button className="btn" onClick={() => nav('/portal/statement')}><Icon name="download" />Account statement</button>
-          <button className="btn primary" disabled={!canRequest && !canEarly} title={!open ? 'Not available for this investment' : canRequest || canEarly ? '' : 'Available from ' + date(i.request_from_date)}
-            onClick={() => nav('/portal/redemptions?request=' + i.code)}>{canEarly ? 'Request early redemption' : 'Request redemption'}</button>
-        </>}>
+        actions={<button className="btn" onClick={() => nav('/portal/statement')}><Icon name="download" />Account statement</button>}>
         <h1><span className="mono">{i.code}</span> · {i.plan_name} <InvBadge i={i} approachingDays={approaching} /></h1>
         <p>{money(i.principal)} at {rate(i.monthly_rate)}, simple interest on the original principal</p>
       </PageHead>
@@ -140,22 +180,20 @@ export function InvestmentDetail() {
         <div className="card"><div className="card-b" style={{ display: 'grid', gap: 20 }}>
           <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <div>
-              <div className="hint">{left ? 'Lock-in ends and investment matures in' : 'Matured on ' + date(i.maturity_date)}</div>
+              <div className="hint">{left ? 'Lock-in ends in' : 'Lock-in ended on ' + date(i.lockin_end_date)}</div>
               <div className="countdown num">{left ? `${left} days` : '—'}</div>
             </div>
             {i.status === 'redeemed' ? (
-              <div className="note ok" style={{ flex: 1, minWidth: 260 }}><b>Redeemed.</b> This investment has been settled. See <Link to="/portal/redemptions">Redemptions</Link> for the details.</div>
-            ) : !open ? (
-              <div className="note info" style={{ flex: 1, minWidth: 260 }}><b>Redemption in progress.</b> Follow each step on the <Link to="/portal/redemptions">Redemptions</Link> page.</div>
-            ) : canRequest ? (
-              <div className="note ok" style={{ flex: 1, minWidth: 260 }}><b>You can request redemption.</b> The request window opened on {date(i.request_from_date)}. Funds are paid on or after {date(i.maturity_date)}.</div>
+              <div className="note" style={{ flex: 1, minWidth: 260 }}><b>Closed.</b> This investment has been settled. Its history is kept under Transactions.</div>
+            ) : unlocked ? (
+              <div className="note ok" style={{ flex: 1, minWidth: 260 }}><b>Principal unlocked.</b> The {lockinText(i.lockin_months)} lock-in ended on {date(i.lockin_end_date)}. Your principal of {money(i.principal)} now counts as unlocked principal. Nothing is paid out or reinvested automatically.</div>
             ) : (
-              <div className="note lock" style={{ flex: 1, minWidth: 260 }}><b>Redemption at maturity isn't available yet.</b> Your agreement has a {i.lockin_months}-month lock-in. You can request redemption from <b>{date(i.request_from_date)}</b>, payable at maturity on {date(i.maturity_date)}. {earlyRule(i)}</div>
+              <div className="note lock" style={{ flex: 1, minWidth: 260 }}><b>Principal locked.</b> Your agreement has a {lockinText(i.lockin_months)} lock-in. The principal unlocks on <b>{date(i.lockin_end_date)}</b>.</div>
             )}
           </div>
           <div className="grid g-1-1-1" style={{ fontSize: 13 }}>
             <div><div className="hint">Start date</div><b>{date(i.start_date)}</b></div>
-            <div><div className="hint">Request window opens</div><b>{date(i.request_from_date)}</b></div>
+            <div><div className="hint">Lock-in period</div><b>{lockinText(i.lockin_months)}</b></div>
             <div><div className="hint">Maturity date</div><b>{date(i.maturity_date)}</b></div>
           </div>
           <Tracker i={i} />
@@ -210,13 +248,11 @@ export function InvestmentDetail() {
                 <dt>Monthly return</dt><dd>{money(i.monthly_return)}</dd>
                 <dt>Method</dt><dd>Simple interest, original principal</dd>
                 <dt>Start date</dt><dd>{date(i.start_date || i.expected_start)}{!i.start_date && i.expected_start ? ' (expected)' : ''}</dd>
-                <dt>Lock-in period</dt><dd>{i.lockin_months} months</dd>
+                <dt>Lock-in period</dt><dd>{lockinText(i.lockin_months)}</dd>
                 <dt>Lock-in end</dt><dd>{date(i.lockin_end_date)}</dd>
                 <dt>Maturity date</dt><dd>{date(i.maturity_date)}</dd>
-                <dt>Redemption request from</dt><dd>{date(i.request_from_date)}</dd>
                 <dt>Payout timing</dt><dd>{i.payout_lag_days} day{i.payout_lag_days === 1 ? '' : 's'} after accrual</dd>
-                <dt>Early redemption</dt><dd>{EARLY_LABEL[i.early_redemption] || i.early_redemption}</dd>
-                <dt>Early redemption fee</dt><dd>{Number(i.early_fee_pct) > 0 ? pct(i.early_fee_pct) + ' of principal' : 'None'}</dd>
+                <dt>Principal status</dt><dd>{i.status === 'redeemed' ? 'Closed' : !i.lockin_end_date ? '—' : unlocked ? 'Unlocked' : 'Locked'}</dd>
                 <dt>Agreement reference</dt><dd className="mono">{i.agreement_ref || '—'}</dd>
                 <dt>Deposit reference</dt><dd className="mono">{i.deposit_ref || '—'}</dd>
               </dl>
@@ -240,7 +276,7 @@ export function InvestmentDetail() {
         <div className="card"><div className="card-h"><h3>Agreement terms</h3></div><div className="card-b"><Prose text={i.terms} empty="No additional terms were recorded with this investment." /></div></div>
         <div className="card"><div className="card-h"><h3>Risk disclosure</h3></div><div className="card-b"><Prose text={i.risk_disclosure} empty="No risk disclosure was recorded with this investment." /></div></div>
       </div>
-      <div className="note info"><b>At maturity.</b> {maturityText(i)}</div>
+      <div className="note info"><b>When the lock-in ends.</b> {maturityText(i)}</div>
       {settings?.support_email && <p className="hint">Questions about this investment? Contact {settings.support_email}{settings.support_phone ? ' · ' + settings.support_phone : ''}.</p>}
     </>
   );

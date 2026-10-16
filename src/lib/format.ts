@@ -87,38 +87,36 @@ export function monthlyReturn(principal: number, ratePct: number): number {
 export const initials = (name: string) => (name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map(x => x[0]!.toUpperCase()).join('') || '?';
 export const ordinal = (d: number) => d + (d % 10 === 1 && d !== 11 ? 'st' : d % 10 === 2 && d !== 12 ? 'nd' : d % 10 === 3 && d !== 13 ? 'rd' : 'th');
 
-/** The investor-facing state label of an investment, derived from status and dates. */
+/** True once the lock-in end date has been reached. Unlocking is a status only; it never moves money. */
+export function isUnlocked(i: Pick<Investment, 'status' | 'lockin_end_date'>, t = today()): boolean {
+  return ['active', 'matured', 'redemption_requested', 'redemption_processing'].includes(i.status) && !!i.lockin_end_date && i.lockin_end_date <= t;
+}
+
+/** The state label of an investment, derived from status and dates. */
 export function investmentLabel(i: Investment, approachingDays: number, t = today()): string {
   switch (i.status) {
     case 'pending_funding': return 'Pending funding';
-    case 'matured': return 'Matured';
-    case 'redemption_requested': return 'Redemption requested';
-    case 'redemption_processing': return 'Redemption processing';
-    case 'redeemed': return 'Redeemed';
+    case 'redeemed': return 'Closed';
     case 'cancelled': return 'Cancelled';
   }
-  if (i.request_from_date && t >= i.request_from_date) return 'Eligible for redemption';
-  if (i.maturity_date && daysBetween(t, i.maturity_date) <= approachingDays) return 'Maturity approaching';
+  if (isUnlocked(i, t)) return 'Unlocked';
+  if (i.maturity_date && daysBetween(t, i.maturity_date) <= approachingDays) return 'Unlocking soon';
   return 'Locked';
 }
 export const INV_BADGE: Record<string, string> = {
-  'Locked': 'b-violet sq', 'Active': 'b-blue', 'Maturity approaching': 'b-amber', 'Eligible for redemption': 'b-green', 'Matured': 'b-green',
-  'Redemption requested': 'b-amber', 'Redemption processing': 'b-blue', 'Redeemed': 'b-grey', 'Cancelled': 'b-grey', 'Pending funding': 'b-grey'
+  'Locked': 'b-violet sq', 'Unlocking soon': 'b-amber', 'Unlocked': 'b-green', 'Closed': 'b-grey', 'Cancelled': 'b-grey', 'Pending funding': 'b-grey'
 };
+/** Lock-in period in words: 6 months, 1 year (12 months). */
+export const lockinText = (m: number) => (m === 12 ? '1 year (12 months)' : m % 12 === 0 ? `${m / 12} years (${m} months)` : `${m} months`);
+/** Monthly rate as a short label: 2%, 3.3%, 6%. */
+export const rateShort = (r: number | string) => String(Number(Number(r).toFixed(4))) + '%';
 export const PAY_BADGE: Record<string, [string, string]> = {
   accrued: ['Accrued', 'b-grey'], approved: ['Approved', 'b-blue'], processing: ['Processing', 'b-amber'], paid: ['Paid', 'b-green'], failed: ['Failed', 'b-red'], cancelled: ['Reversed', 'b-grey']
 };
 export const LEDGER_BADGE: Record<string, [string, string]> = {
   confirmed: ['Confirmed', 'b-green'], pending: ['Pending', 'b-amber'], posted: ['Posted', 'b-grey'], failed: ['Failed', 'b-red'], reversed: ['Reversed', 'b-grey']
 };
-export const REDEMPTION_BADGE: Record<string, [string, string]> = {
-  requested: ['Requested', 'b-amber'], under_review: ['Under review', 'b-blue'], approved: ['Approved', 'b-blue'], processing: ['Processing', 'b-amber'],
-  completed: ['Completed', 'b-green'], rejected: ['Rejected', 'b-red'], withdrawn: ['Withdrawn', 'b-grey']
-};
 export const LEDGER_TYPE: Record<string, string> = {
   deposit: 'Deposit', allocation: 'Investment allocation', return_accrual: 'Return accrued', return_payout: 'Return payout',
-  redemption_request: 'Redemption request', principal_redemption: 'Principal redemption', refund: 'Refund', adjustment: 'Adjustment', fee: 'Fee', reversal: 'Reversal'
-};
-export const EARLY_LABEL: Record<string, string> = {
-  not_permitted: 'Not permitted before maturity', permitted_with_fee: 'Permitted with a fee', admin_discretion: 'At admin discretion'
+  redemption_request: 'Principal request (closed)', principal_redemption: 'Principal repaid', refund: 'Refund', adjustment: 'Adjustment', fee: 'Fee', reversal: 'Reversal'
 };

@@ -3,8 +3,9 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { supabase, rpc, must, fetchAll } from '../lib/supabase';
 import { useQuery, refreshAll } from '../lib/useQuery';
 import { useSettings } from '../lib/auth';
-import { money, moneyShort, date, dateShort, dateTime, rate, today, monthlyReturn, EARLY_LABEL } from '../lib/format';
+import { money, moneyShort, date, dateShort, dateTime, lockinText, rate, rateShort, today, monthlyReturn } from '../lib/format';
 import type { Plan, PlanVersion, PlanStatus, Investment, Profile, EarlyRedemption, Settings } from '../lib/types';
+import { DataTable } from '../ui/DataTable';
 import { Empty, ErrorNote, Loading, PageHead, InvBadge, Badge, Drawer, Modal, Field, useAction } from '../ui/kit';
 import { Icon } from '../ui/Icon';
 
@@ -12,9 +13,9 @@ const LIVE = ['active', 'matured', 'redemption_requested', 'redemption_processin
 const PLAN_BADGE: Record<PlanStatus, [string, string]> = { active: ['Active', 'b-green'], inactive: ['Inactive', 'b-amber'], archived: ['Archived', 'b-grey'], draft: ['Draft', 'b-grey'] };
 const PlanBadge = ({ s }: { s: PlanStatus }) => <Badge cls={PLAN_BADGE[s][1]}>{PLAN_BADGE[s][0]}</Badge>;
 
-const lockins = (v: PlanVersion) => v.lockin_options.slice().sort((a, b) => a - b).join(', ') + ' months' + (v.allow_custom_lockin ? ' + custom' : '');
-const earlyText = (v: Pick<PlanVersion, 'early_redemption' | 'early_fee_pct'>) =>
-  v.early_redemption === 'permitted_with_fee' ? `Permitted with a ${Number(v.early_fee_pct).toFixed(2)}% fee on principal` : EARLY_LABEL[v.early_redemption] || v.early_redemption;
+const lockins = (v: PlanVersion) => v.lockin_options.slice().sort((a, b) => a - b).map(lockinText).join(' or ') + (v.allow_custom_lockin ? ' + custom' : '');
+const STANDARD_RATES = [2, 3.3, 6];
+interface Flag { investment_id: string; code: string; investor: string; reason: string }
 
 type InvLite = Pick<Investment, 'id' | 'plan_id' | 'principal' | 'status'>;
 interface ListData { plans: Plan[]; versions: PlanVersion[]; invs: InvLite[] }
@@ -35,6 +36,8 @@ export function Plans() {
   const [creating, setCreating] = useState(sp.get('new') === '1');
   const [filter, setFilter] = useState<'all' | PlanStatus>('all');
   const q = useQuery(loadPlans, []);
+  const flags = useQuery(() => rpc<Flag[]>('admin_review_flags').then(r => r || []), []);
+  const [standard, setStandard] = useState(false);
   const close = () => { setCreating(false); if (sp.get('new')) { sp.delete('new'); setSp(sp, { replace: true }); } };
 
   const cards = useMemo(() => {
@@ -47,12 +50,16 @@ export function Plans() {
   }, [q.data]);
   const shown = cards.filter(c => filter === 'all' ? c.p.status !== 'archived' : c.p.status === filter);
   const counts = (s: PlanStatus) => cards.filter(c => c.p.status === s).length;
+  const missing = STANDARD_RATES.filter(r => !cards.some(c => c.p.status !== 'archived' && c.cur && Number(c.cur.monthly_rate) === r));
 
   return (
     <>
       <PageHead crumbs={['Investment Plans']} title="Investment Plans"
         sub="Rates are configurable. Editing a plan creates a new version; existing investments keep the terms they signed."
-        actions={<button className="btn accent" onClick={() => setCreating(true)}><Icon name="plus" />New plan</button>} />
+        actions={<>
+          {q.data && missing.length > 0 && <button className="btn" onClick={() => setStandard(true)}><Icon name="plus" />Add {missing.map(rateShort).join(', ')} plan{missing.length === 1 ? '' : 's'}</button>}
+          <button className="btn accent" onClick={() => setCreating(true)}><Icon name="plus" />New plan</button>
+        </>} />
       {q.error ? <ErrorNote msg={q.error} retry={q.reload} /> : !q.data ? <Loading /> : !cards.length ? (
         <div className="card"><div className="card-b">
           <Empty title="No plans yet">
@@ -74,12 +81,11 @@ export function Plans() {
                   <div className="card-h"><h3>{p.name}</h3><span className="mono muted">{p.code} · v{p.current_version}</span><div className="r"><PlanBadge s={p.status} /></div></div>
                   <div className="card-b" style={{ display: 'grid', gap: 14 }}>
                     {cur ? <>
-                      <div><div style={{ fontSize: 30, fontWeight: 700, letterSpacing: '-.02em' }} className="num">{Number(cur.monthly_rate).toFixed(2)}%</div><div className="hint">per month · simple interest on principal</div></div>
+                      <div><div style={{ fontSize: 30, fontWeight: 700, letterSpacing: '-.02em' }} className="num">{rateShort(cur.monthly_rate)}</div><div className="hint">per month · simple interest on principal</div></div>
                       {p.description && <p className="muted" style={{ fontSize: 13 }}>{p.description}</p>}
                       <dl className="kv">
                         <dt>Investment range</dt><dd>{moneyShort(cur.min_amount)} – {moneyShort(cur.max_amount)}</dd>
                         <dt>Lock-in</dt><dd>{lockins(cur)}</dd>
-                        <dt>Early redemption</dt><dd>{cur.early_redemption === 'permitted_with_fee' ? `${Number(cur.early_fee_pct).toFixed(2)}% fee` : cur.early_redemption === 'admin_discretion' ? 'Admin discretion' : 'Not permitted'}</dd>
                         <dt>Eligible</dt><dd>{dateShort(cur.eligible_from)} – {cur.eligible_to ? date(cur.eligible_to) : 'open-ended'}</dd>
                         <dt>Live investments</dt><dd>{live} · {moneyShort(principal)}</dd>
                       </dl>
@@ -93,6 +99,12 @@ export function Plans() {
           <p className="hint">Rates are set by your company and are not guaranteed returns.</p>
         </>
       )}
+      {flags.data && flags.data.length > 0 && (
+        <DataTable<Flag> title="Investments to review" right={`${flags.data.length} flagged · terms are never changed automatically`} rows={flags.data} rowKey={r => r.investment_id}
+          searchPh="Search investment or investor" per={8} href={r => '/admin/investments/' + r.code}
+          cols={[{ h: 'Investment', v: r => r.code, m: true }, { h: 'Investor', v: r => r.investor }, { h: 'Why it is flagged', v: r => r.reason }]} />
+      )}
+      {standard && <StandardPlans rates={missing} onClose={() => setStandard(false)} />}
       {creating && <PlanForm onClose={close} onSaved={code => { close(); if (code) nav('/admin/plans/' + code); }} />}
     </>
   );
@@ -119,6 +131,24 @@ function initForm(s: Settings, plan?: Plan, cur?: PlanVersion): FormState {
   };
 }
 
+function StandardPlans({ rates, onClose }: { rates: number[]; onClose: () => void }) {
+  const act = useAction();
+  const [activate, setActivate] = useState(true);
+  const go = async () => {
+    const r = await act.run(() => rpc<number>('admin_create_standard_plans', { p_activate: activate }), ['Plans created', 'Edit the minimum and maximum amounts, terms and risk disclosure on each plan.']);
+    if (r !== undefined) { refreshAll(); onClose(); }
+  };
+  return (
+    <Modal title={`Add the ${rates.map(rateShort).join(', ')} monthly plan${rates.length === 1 ? '' : 's'}?`} onClose={onClose}
+      sub="Each plan pays simple monthly interest on the original principal, with 6-month and 1-year lock-ins. Existing plans and investments are not changed."
+      foot={<><button className="btn ghost" onClick={onClose}>Cancel</button><button className="btn primary" onClick={go} disabled={act.busy}>Create plans</button></>}>
+      <div className="note info">{money(100000)} earns {rates.map(r => `${money(monthlyReturn(100000, r))} a month at ${rateShort(r)}`).join(', ')}.</div>
+      <p className="hint">The investment range starts open (from 1 upwards). Set your real minimum and maximum on each plan afterwards; that creates a new version and is recorded in the audit log.</p>
+      <label className="check"><input type="checkbox" checked={activate} onChange={e => setActivate(e.target.checked)} /> Open the plans for new investments straight away</label>
+    </Modal>
+  );
+}
+
 function PlanForm({ plan, cur, onClose, onSaved }: { plan?: Plan; cur?: PlanVersion; onClose: () => void; onSaved: (code: string) => void }) {
   const s = useSettings();
   const act = useAction();
@@ -130,7 +160,7 @@ function PlanForm({ plan, cur, onClose, onSaved }: { plan?: Plan; cur?: PlanVers
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setF(x => ({ ...x, [k]: v }));
   const inp = (k: keyof FormState) => (e: { target: { value: string } }) => set(k, e.target.value as never);
 
-  const r = Number(f.monthly_rate), mn = Number(f.min_amount), mx = Number(f.max_amount), fee = Number(f.early_fee_pct), lag = Number(f.payout_lag_days);
+  const r = Number(f.monthly_rate), mn = Number(f.min_amount), mx = Number(f.max_amount), lag = Number(f.payout_lag_days);
   const options = [...new Set([...(s.lockin_options || []), ...f.lockins])].sort((a, b) => a - b);
   const errs: Record<string, string | null> = {
     name: !f.name.trim() ? 'Enter a plan name.' : null,
@@ -140,7 +170,6 @@ function PlanForm({ plan, cur, onClose, onSaved }: { plan?: Plan; cur?: PlanVers
     max: !(mx > 0) || mx < mn ? 'Maximum must be at least the minimum.' : null,
     lock: !f.lockins.length ? 'Choose at least one lock-in.' : null,
     elig: f.eligible_to && f.eligible_to < f.eligible_from ? 'End date must be on or after the start date.' : null,
-    fee: f.early_redemption === 'permitted_with_fee' && !(fee >= 0 && fee <= 100) ? 'Fee must be between 0 and 100%.' : null,
     lag: !(Number.isInteger(lag) && lag >= 0 && lag <= 60) ? 'Whole days between 0 and 60.' : null,
     eff: !f.effective_from ? 'Choose a date.' : null,
     reason: editing && !reason.trim() ? 'A reason is required. It is saved to the version history and audit log.' : null
@@ -161,8 +190,8 @@ function PlanForm({ plan, cur, onClose, onSaved }: { plan?: Plan; cur?: PlanVers
     if (bad) return;
     const version = {
       monthly_rate: r, min_amount: mn, max_amount: mx, lockin_options: f.lockins, allow_custom_lockin: s.allow_custom_lockin && f.allow_custom_lockin,
-      eligible_from: f.eligible_from, eligible_to: f.eligible_to || null, early_redemption: f.early_redemption,
-      early_fee_pct: f.early_redemption === 'permitted_with_fee' ? fee : 0, payout_lag_days: lag, terms: f.terms, risk_disclosure: f.risk_disclosure, effective_from: f.effective_from
+      eligible_from: f.eligible_from, eligible_to: f.eligible_to || null, early_redemption: 'not_permitted',
+      early_fee_pct: 0, payout_lag_days: lag, terms: f.terms, risk_disclosure: f.risk_disclosure, effective_from: f.effective_from
     };
     if (editing && plan) {
       const v = await act.run(() => rpc<number>('admin_update_plan', { p_plan: plan.id, p_name: f.name.trim(), p_description: f.description.trim(), p_version: version, p_reason: reason.trim() }),
@@ -183,7 +212,7 @@ function PlanForm({ plan, cur, onClose, onSaved }: { plan?: Plan; cur?: PlanVers
     <Drawer title={editing ? `Edit ${plan!.name}` : 'New investment plan'} sub={editing ? `Saving creates version v${plan!.current_version + 1}.` : 'Saved as a draft until you activate it.'} onClose={onClose}
       foot={<><button className="btn ghost" onClick={onClose}>Cancel</button><button className="btn primary" onClick={save} disabled={act.busy}>{editing ? `Save version v${plan!.current_version + 1}` : 'Create plan'}</button></>}>
       <div className="form">
-        {editing && <div className="note lock"><b>Existing investments keep their terms.</b> Investments already on this plan stay at their contractual rate, lock-in and redemption terms. This version applies only to investments recorded after it takes effect.</div>}
+        {editing && <div className="note lock"><b>Existing investments keep their terms.</b> Investments already on this plan stay at their contractual rate and lock-in. This version applies only to investments recorded after it takes effect.</div>}
         <div className="f-row">
           <Field label="Plan name *" err={e('name')}><input className={'input ' + (e('name') ? 'bad' : '')} value={f.name} onChange={inp('name')} placeholder="e.g. Growth Plan" /></Field>
           {editing
@@ -225,18 +254,6 @@ function PlanForm({ plan, cur, onClose, onSaved }: { plan?: Plan; cur?: PlanVers
         <div className="f-row">
           <Field label="Eligible from"><input className="input" type="date" value={f.eligible_from} onChange={inp('eligible_from')} /></Field>
           <Field label="Eligible to" err={e('elig')} hint="Leave blank for open-ended."><input className="input" type="date" value={f.eligible_to} onChange={inp('eligible_to')} /></Field>
-        </div>
-        <div className="f-row">
-          <Field label="Early redemption">
-            <select className="input" value={f.early_redemption} onChange={ev => set('early_redemption', ev.target.value as EarlyRedemption)}>
-              <option value="not_permitted">Not permitted before maturity</option>
-              <option value="permitted_with_fee">Permitted with a fee</option>
-              <option value="admin_discretion">At admin discretion</option>
-            </select>
-          </Field>
-          {f.early_redemption === 'permitted_with_fee'
-            ? <Field label="Early redemption fee (% of principal)" err={e('fee')}><input className="input" inputMode="decimal" value={f.early_fee_pct} onChange={inp('early_fee_pct')} /></Field>
-            : <div />}
         </div>
         <div className="f-row">
           <Field label="Payout within (days of accrual)" err={e('lag')}><input className="input" inputMode="numeric" value={f.payout_lag_days} onChange={inp('payout_lag_days')} /></Field>
@@ -326,7 +343,6 @@ export function PlanDetail() {
                 <dt>Maturity convention</dt><dd>Start + lock-in calendar months</dd>
                 <dt>Accrual schedule</dt><dd>Monthly on start-date anniversary</dd>
                 <dt>Payout schedule</dt><dd>Within {cur.payout_lag_days} day{cur.payout_lag_days === 1 ? '' : 's'} of accrual</dd>
-                <dt>Early redemption</dt><dd>{earlyText(cur)}</dd>
                 <dt>Eligible to invest</dt><dd>{date(cur.eligible_from)} – {cur.eligible_to ? date(cur.eligible_to) : 'open-ended'}</dd>
                 <dt>Live principal</dt><dd>{money(live.reduce((x, i) => x + Number(i.principal), 0))} · {live.length} live</dd>
                 <dt>Created by</dt><dd>{(pl.created_by && names[pl.created_by]) || '—'} · {date(plan.created_at)}</dd>

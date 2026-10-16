@@ -4,7 +4,6 @@ export type AccountStatus = 'active' | 'suspended';
 export type PlanStatus = 'draft' | 'active' | 'inactive' | 'archived';
 export type InvestmentStatus = 'pending_funding' | 'active' | 'matured' | 'redemption_requested' | 'redemption_processing' | 'redeemed' | 'cancelled';
 export type PayoutStatus = 'accrued' | 'approved' | 'processing' | 'paid' | 'failed' | 'cancelled';
-export type RedemptionStatus = 'requested' | 'under_review' | 'approved' | 'processing' | 'completed' | 'rejected' | 'withdrawn';
 export type EarlyRedemption = 'not_permitted' | 'permitted_with_fee' | 'admin_discretion';
 
 export interface Settings {
@@ -12,14 +11,17 @@ export interface Settings {
   currency: string; locale: string; timezone: string; approaching_days: number; request_window_days: number;
   default_payout_lag_days: number; four_eyes: boolean; allow_custom_lockin: boolean; lockin_options: number[];
   default_terms: string; default_risk_disclosure: string; support_email: string; support_phone: string; legal_footer: string;
+  property_site_url: string; show_properties_to: 'all' | 'unlocked';
   updated_at: string;
 }
 
 export interface Profile {
   id: string; role: Role; code: string | null; full_name: string; email: string; phone: string; address: string; city: string;
   id_number_masked: string; bank_name: string; bank_account_masked: string; bank_ifsc: string;
-  kyc_status: KycStatus; account_status: AccountStatus; notify_email: boolean; created_at: string; updated_at: string;
+  kyc_status: KycStatus; account_status: AccountStatus; notify_email: boolean; branch_id: string | null; created_at: string; updated_at: string;
 }
+
+export interface Branch { id: string; code: string; name: string; city: string; status: 'active' | 'inactive'; created_at: string; updated_at: string }
 
 export interface Plan {
   id: string; code: string; name: string; description: string; status: PlanStatus; current_version: number;
@@ -62,13 +64,6 @@ export interface LedgerEntry {
   source_table: string | null; source_id: string | null; created_at: string;
 }
 
-export interface Redemption {
-  id: string; code: string; investment_id: string; investor_id: string; type: 'maturity' | 'early'; status: RedemptionStatus;
-  note: string; payable_on: string; fee_amount: number; decision_reason: string | null; payment_ref: string | null;
-  decided_by: string | null; decided_at: string | null; completed_by: string | null; completed_at: string | null; created_at: string; updated_at: string;
-}
-
-export interface RedemptionEvent { id: string; request_id: string; from_status: RedemptionStatus | null; to_status: RedemptionStatus; actor_id: string | null; actor_name: string; note: string; at: string }
 
 export interface Announcement {
   id: string; code: string; title: string; body: string; category: string; audience: 'all' | 'selected' | 'plan' | 'maturing';
@@ -85,14 +80,37 @@ export interface DocumentRow {
 
 export interface AuditLog { id: number; at: string; actor_id: string | null; actor_name: string; action: string; entity_type: string; entity_id: string | null; entity_label: string; reason: string; before: unknown; after: unknown }
 
+export interface Brochure {
+  id: string; code: string; title: string; description: string; storage_path: string | null; file_name: string; mime: string; size_bytes: number;
+  plan_id: string | null; branch_id: string | null; publish_on: string; starts_on: string | null; ends_on: string | null;
+  status: 'draft' | 'published' | 'archived'; published_at: string | null; created_at: string; updated_at: string;
+}
+export interface MyBrochure {
+  id: string; code: string; title: string; description: string; storage_path: string; file_name: string; mime: string; plan_id: string | null; plan_name: string | null;
+  publish_on: string; starts_on: string | null; ends_on: string | null; seen: boolean; acknowledged: boolean;
+}
+export interface Property {
+  id: string; title: string; location: string; property_type: string; price_text: string; description: string; image_url: string | null; url: string;
+  status: 'draft' | 'published' | 'archived'; sort_order: number; created_at: string; updated_at: string;
+}
+
+export interface RateSplit { rate: number; investors: number; principal: number; count: number; unlocked?: number }
+export interface BranchStats {
+  id: string; code: string; name: string; status: string; investors: number; principal: number; unlocked: number; locked: number;
+  accrued: number; paid: number; by_rate: RateSplit[];
+}
+
 export interface Dashboard {
-  today: string; registered_investors: number; new_investors_month: number; active_investors: number; live_investments: number;
-  principal_invested: number; locked_principal: number; accrued_total: number; reversed_total: number; paid_total: number;
+  today: string; from: string; to: string; branch_id: string | null;
+  registered_investors: number; total_investors: number; new_investors_month: number; investors_with_investments: number; live_investments: number;
+  principal_invested: number; unlocked_principal: number; unlocked_count: number; locked_principal: number; locked_count: number;
+  accrued_total: number; reversed_total: number; paid_total: number;
   outstanding_total: number; outstanding_count: number; maturing_count: number; maturing_principal: number;
-  pending_redemptions: number; pending_redemption_principal: number; active_plans: number; other_plans: number;
-  pending_funding: number; kyc_pending: number;
+  pending_funding: number; kyc_pending: number; unassigned_investors: number; unassigned_principal: number;
   payouts_by_status: Record<string, { count: number; amount: number }>;
   monthly: { month: string; accrued: number; paid: number; invested: number }[];
-  by_plan: { plan: string; code: string; principal: number; count: number }[];
-  by_lockin: { months: number; count: number; principal: number }[];
+  by_branch: BranchStats[];
+  by_rate: RateSplit[];
+  by_plan: { plan_id: string; plan: string; code: string; rate: number; status: string; investors: number; principal: number; count: number }[];
+  by_lockin: { months: number; count: number; principal: number; unlocked: number }[];
 }

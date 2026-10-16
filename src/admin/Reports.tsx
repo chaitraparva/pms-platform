@@ -2,24 +2,25 @@ import { ReactNode, useState } from 'react';
 import { supabase, rpc, fetchAll, must } from '../lib/supabase';
 import { useQuery } from '../lib/useQuery';
 import { useAuth } from '../lib/auth';
-import { money, today, addMonths, daysBetween, investmentLabel, LEDGER_TYPE, EARLY_LABEL } from '../lib/format';
+import { money, today, addMonths, daysBetween, investmentLabel, isUnlocked, rateShort, LEDGER_TYPE } from '../lib/format';
 import { downloadCsv } from '../lib/csv';
-import type { Accrual, AuditLog, Balance, Dashboard, Investment, LedgerEntry, Payout, Plan, PlanVersion, Profile, Redemption } from '../lib/types';
+import type { Accrual, AuditLog, Balance, Dashboard, Investment, LedgerEntry, Payout, Plan, PlanVersion, Profile, Branch } from '../lib/types';
 import { ErrorNote, Loading, PageHead, Empty, useAction } from '../ui/kit';
 import { Icon } from '../ui/Icon';
 import { monthLabel } from '../ui/Charts';
 
 type Cell = string | number | null | undefined;
-type Person = Pick<Profile, 'id' | 'code' | 'full_name' | 'email' | 'phone' | 'city' | 'kyc_status' | 'account_status' | 'created_at' | 'role' | 'bank_name' | 'bank_account_masked' | 'bank_ifsc'>;
+type Person = Pick<Profile, 'id' | 'code' | 'full_name' | 'email' | 'phone' | 'city' | 'kyc_status' | 'account_status' | 'created_at' | 'role' | 'bank_name' | 'bank_account_masked' | 'bank_ifsc' | 'branch_id'>;
 
 const LIVE = ['active', 'matured', 'redemption_requested', 'redemption_processing'];
 const n2 = (v: number | string | null | undefined) => (v == null ? '' : Number(v).toFixed(2));
 const nameOf = (p?: { full_name: string; email: string }) => (p ? p.full_name || p.email : '');
 
 async function people() {
-  const ps = await fetchAll<Person>((a, b) => supabase.from('profiles').select('id, code, full_name, email, phone, city, kyc_status, account_status, created_at, role, bank_name, bank_account_masked, bank_ifsc').range(a, b));
+  const ps = await fetchAll<Person>((a, b) => supabase.from('profiles').select('id, code, full_name, email, phone, city, kyc_status, account_status, created_at, role, bank_name, bank_account_masked, bank_ifsc, branch_id').range(a, b));
   return new Map(ps.map(p => [p.id, p]));
 }
+const branchNames = async () => new Map((must(await supabase.from('branches').select('*')) as Branch[]).map(b => [b.id, b.name]));
 const investments = () => fetchAll<Investment>((a, b) => supabase.from('investments').select('*').order('created_at').range(a, b));
 async function balances() {
   const bs = await fetchAll<Balance>((a, b) => supabase.from('investment_balances').select('*').range(a, b));
@@ -69,24 +70,25 @@ export function Reports() {
   const csv = (name: string, headers: string[], rows: Cell[][]) => { downloadCsv(`${name}-${t}`, headers, rows); return rows.length; };
 
   const portfolio = async () => {
-    const [invs, bal, ppl] = await Promise.all([investments(), balances(), people()]);
-    return csv('portfolio', ['Investment', 'Investor ID', 'Investor', 'Plan', 'Plan version', 'Rate % / month', 'Principal', 'Monthly return', 'Lock-in months', 'Status', 'Start', 'Maturity',
-      'Periods accrued', 'Accrued (net)', 'Paid', 'Processing', 'Approved', 'Accrued not approved', 'Outstanding', 'Agreement ref', 'Deposit ref'],
-      invs.map(i => { const b = bal.get(i.id); const p = ppl.get(i.investor_id); return [i.code, p?.code, nameOf(p), i.plan_name, i.plan_version, i.monthly_rate, n2(i.principal), n2(i.monthly_return), i.lockin_months,
-        investmentLabel(i, settings?.approaching_days ?? 60, t), i.start_date, i.maturity_date, b?.periods_accrued ?? 0, n2(b?.accrued), n2(b?.paid), n2(b?.processing), n2(b?.approved), n2(b?.unapproved),
+    const [invs, bal, ppl, bn] = await Promise.all([investments(), balances(), people(), branchNames()]);
+    return csv('portfolio', ['Investment', 'Investor ID', 'Investor', 'Branch', 'Plan', 'Plan version', 'Rate % / month', 'Principal', 'Monthly return', 'Lock-in months', 'Status', 'Start', 'Maturity',
+      'Principal locked / unlocked', 'Periods accrued', 'Accrued (net)', 'Paid', 'Processing', 'Approved', 'Accrued not approved', 'Outstanding', 'Agreement ref', 'Deposit ref'],
+      invs.map(i => { const b = bal.get(i.id); const p = ppl.get(i.investor_id); return [i.code, p?.code, nameOf(p), p?.branch_id ? bn.get(p.branch_id) : '', i.plan_name, i.plan_version, i.monthly_rate, n2(i.principal), n2(i.monthly_return), i.lockin_months,
+        investmentLabel(i, settings?.approaching_days ?? 60, t), i.start_date, i.maturity_date, LIVE.includes(i.status) ? (isUnlocked(i, t) ? 'Unlocked' : 'Locked') : '', b?.periods_accrued ?? 0, n2(b?.accrued), n2(b?.paid), n2(b?.processing), n2(b?.approved), n2(b?.unapproved),
         n2(outstanding(b)), i.agreement_ref, i.deposit_ref]; }));
   };
 
   const investorSummary = async () => {
-    const [invs, bal, ppl] = await Promise.all([investments(), balances(), people()]);
+    const [invs, bal, ppl, bn] = await Promise.all([investments(), balances(), people(), branchNames()]);
     const inv = Array.from(ppl.values()).filter(p => p.role === 'investor').sort((a, b) => (a.code || '').localeCompare(b.code || ''));
-    return csv('investor-summary', ['Investor ID', 'Name', 'Email', 'Phone', 'City', 'Registered', 'KYC', 'Account', 'Live investments', 'Live principal', 'Accrued (net)', 'Paid', 'Outstanding', 'Next maturity', 'Bank', 'Account no.', 'IFSC'],
+    return csv('investor-summary', ['Investor ID', 'Name', 'Email', 'Branch', 'Phone', 'City', 'Registered', 'KYC', 'Account', 'Live investments', 'Live principal', 'Unlocked principal', 'Locked principal', 'Accrued (net)', 'Paid', 'Outstanding', 'Next unlock', 'Bank', 'Account no.', 'IFSC'],
       inv.map(p => {
         const mine = invs.filter(i => i.investor_id === p.id);
         const live = mine.filter(i => LIVE.includes(i.status));
         const bs = mine.map(i => bal.get(i.id));
-        const next = live.filter(i => i.maturity_date && i.maturity_date >= t).map(i => i.maturity_date as string).sort()[0] || '';
-        return [p.code, p.full_name, p.email, p.phone, p.city, p.created_at.slice(0, 10), p.kyc_status, p.account_status, live.length, n2(live.reduce((s, i) => s + Number(i.principal), 0)),
+        const next = live.filter(i => !isUnlocked(i, t) && i.lockin_end_date).map(i => i.lockin_end_date as string).sort()[0] || '';
+        const unl = live.filter(i => isUnlocked(i, t)).reduce((s, i) => s + Number(i.principal), 0), tot = live.reduce((s, i) => s + Number(i.principal), 0);
+        return [p.code, p.full_name, p.email, p.branch_id ? bn.get(p.branch_id) : '', p.phone, p.city, p.created_at.slice(0, 10), p.kyc_status, p.account_status, live.length, n2(tot), n2(unl), n2(tot - unl),
           n2(bs.reduce((s, b) => s + Number(b?.accrued || 0), 0)), n2(bs.reduce((s, b) => s + Number(b?.paid || 0), 0)), n2(bs.reduce((s, b) => s + outstanding(b), 0)), next,
           p.bank_name, p.bank_account_masked, p.bank_ifsc];
       }));
@@ -124,20 +126,18 @@ export function Reports() {
       fetchAll<Investment>((a, b) => supabase.from('investments').select('*').in('status', ['active', 'redemption_requested', 'redemption_processing']).gte('maturity_date', t).lte('maturity_date', until).order('maturity_date').range(a, b)),
       people()
     ]);
-    return csv(`upcoming-maturities-${matDays}d`, ['Maturity', 'Days left', 'Investment', 'Investor ID', 'Investor', 'Email', 'Phone', 'Plan', 'Principal', 'Lock-in months', 'Request window opens', 'Status'],
+    return csv(`upcoming-unlocks-${matDays}d`, ['Lock-in ends', 'Days left', 'Investment', 'Investor ID', 'Investor', 'Email', 'Phone', 'Plan', 'Principal', 'Lock-in months', 'Status'],
       invs.map(i => { const p = ppl.get(i.investor_id); return [i.maturity_date, i.maturity_date ? daysBetween(t, i.maturity_date) : '', i.code, p?.code, nameOf(p), p?.email, p?.phone, i.plan_name, n2(i.principal), i.lockin_months,
-        i.request_from_date, investmentLabel(i, settings?.approaching_days ?? 60, t)]; }));
+        investmentLabel(i, settings?.approaching_days ?? 60, t)]; }));
   };
 
-  const redemptions = async () => {
-    const [reqs, invs, ppl, bal] = await Promise.all([
-      fetchAll<Redemption>((a, b) => supabase.from('redemption_requests').select('*').order('created_at').range(a, b)), investments(), people(), balances()
-    ]);
-    const ib = new Map(invs.map(i => [i.id, i]));
-    return csv('redemptions', ['Request', 'Requested', 'Investment', 'Investor ID', 'Investor', 'Type', 'Status', 'Payable on', 'Principal', 'Fee', 'Unpaid returns now', 'Investor note', 'Decision reason', 'Decided by', 'Decided at', 'Payment reference', 'Completed by', 'Completed at'],
-      reqs.map(r => { const i = ib.get(r.investment_id); const p = ppl.get(r.investor_id); const open = ['requested', 'under_review', 'approved', 'processing'].includes(r.status);
-        return [r.code, r.created_at.slice(0, 10), i?.code, p?.code, nameOf(p), r.type, r.status, r.payable_on, n2(i?.principal), n2(r.fee_amount), open ? n2(outstanding(bal.get(r.investment_id))) : '',
-          r.note, r.decision_reason, nameOf(ppl.get(r.decided_by || '')), r.decided_at, r.payment_ref, nameOf(ppl.get(r.completed_by || '')), r.completed_at]; }));
+  const branchSummary = async () => {
+    const d = await rpc<Dashboard>('admin_dashboard');
+    const rows: Cell[][] = (d.by_branch || []).map(b => [b.name, b.investors, n2(b.principal), n2(b.unlocked), n2(b.locked), n2(b.accrued), n2(b.paid),
+      (b.by_rate || []).map(r => `${rateShort(r.rate)}: ${r.investors} investor${Number(r.investors) === 1 ? '' : 's'}, ${n2(r.principal)}`).join('; ')]);
+    rows.push(['No branch', d.unassigned_investors, n2(d.unassigned_principal), '', '', '', '', '']);
+    rows.push(['Total', d.total_investors, n2(d.principal_invested), n2(d.unlocked_principal), n2(d.locked_principal), n2(d.accrued_total), n2(d.paid_total), '']);
+    return csv('branch-summary', ['Branch', 'Investors', 'Principal invested', 'Unlocked principal', 'Locked principal', 'Returns accrued', 'Returns paid', 'By monthly ROI'], rows);
   };
 
   const planVersions = async () => {
@@ -147,9 +147,9 @@ export function Reports() {
     ]);
     const pb = new Map(plans.map(p => [p.id, p]));
     return csv('plan-versions', ['Plan code', 'Plan name', 'Plan status', 'Version', 'Current', 'Rate % / month', 'Min amount', 'Max amount', 'Lock-in options (months)', 'Custom lock-in', 'Eligible from', 'Eligible to',
-      'Early redemption', 'Early fee %', 'Payout lag days', 'Effective from', 'Change reason', 'Created by', 'Created at'],
+      'Payout lag days', 'Effective from', 'Change reason', 'Created by', 'Created at'],
       vers.map(v => { const p = pb.get(v.plan_id); return [p?.code, p?.name, p?.status, v.version, p?.current_version === v.version ? 'yes' : '', v.monthly_rate, n2(v.min_amount), n2(v.max_amount), v.lockin_options.join(' / '),
-        v.allow_custom_lockin ? 'yes' : 'no', v.eligible_from, v.eligible_to, EARLY_LABEL[v.early_redemption] || v.early_redemption, v.early_fee_pct, v.payout_lag_days, v.effective_from, v.change_reason,
+        v.allow_custom_lockin ? 'yes' : 'no', v.eligible_from, v.eligible_to, v.payout_lag_days, v.effective_from, v.change_reason,
         nameOf(ppl.get(v.created_by || '')), v.created_at]; }));
   };
 
@@ -193,7 +193,7 @@ export function Reports() {
       </div>
       <div className="grid g-1-1">
         <ReportCard title="Portfolio" desc="Every investment with its contractual terms and live balances: accrued, paid, processing and outstanding." onCsv={portfolio} />
-        <ReportCard title="Investor summary" desc="One row per investor: KYC, account status, live principal, accrued, paid, outstanding and next maturity." onCsv={investorSummary} />
+        <ReportCard title="Investor summary" desc="One row per investor: branch, KYC, account status, live, unlocked and locked principal, accrued, paid, outstanding and next unlock." onCsv={investorSummary} />
         <ReportCard title="Accrual register" desc="Every accrual entry in the period (by accrual date), including stubs and reversals, with its payout status." onCsv={accrualRegister}>
           <RangeInputs from={accFrom} to={accTo} setFrom={setAccFrom} setTo={setAccTo} />
         </ReportCard>
@@ -206,10 +206,10 @@ export function Reports() {
             </select>
           </div>
         </ReportCard>
-        <ReportCard title="Upcoming maturities" desc="Active investments maturing in the next N days, with contact details and when the request window opens." onCsv={maturities}>
+        <ReportCard title="Upcoming unlocks" desc="Investments whose lock-in ends in the next N days, with contact details." onCsv={maturities}>
           <div className="field"><label>Next (days)</label><input className="input" type="number" min={1} max={3650} value={matDays} onChange={e => setMatDays(Math.max(1, parseInt(e.target.value || '1', 10)))} /></div>
         </ReportCard>
-        <ReportCard title="Redemptions" desc="All redemption requests with type, fee, decisions, settlement references and who acted on them." onCsv={redemptions} />
+        <ReportCard title="Branch summary" desc="Tumkur and Bangalore side by side: investors, principal, unlocked and locked principal, returns, and the split by monthly ROI." onCsv={branchSummary} />
         <ReportCard title="Plan version history" desc="Every plan version with its rate, limits, lock-in options, effective date and the reason for each change." onCsv={planVersions} />
         <ReportCard title="Transaction ledger" desc="The full append-only ledger for a date range, including reversing entries." onCsv={ledger}>
           <RangeInputs from={ledFrom} to={ledTo} setFrom={setLedFrom} setTo={setLedTo} />

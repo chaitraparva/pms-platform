@@ -5,14 +5,14 @@ import { useQuery, refreshAll } from '../lib/useQuery';
 import { useAuth, useSettings } from '../lib/auth';
 import { uploadDocument, openDocument, deleteDocument } from '../lib/docs';
 import { downloadCsv } from '../lib/csv';
-import { money, date, dateShort, dateTime, rate, pct, today, addMonths, daysBetween, monthlyReturn, investmentLabel, LEDGER_TYPE, EARLY_LABEL } from '../lib/format';
-import type { Investment, Balance, Profile, Plan, PlanVersion, Accrual, Payout, LedgerEntry } from '../lib/types';
+import { money, date, dateShort, dateTime, rate, today, addMonths, daysBetween, monthlyReturn, investmentLabel, isUnlocked, lockinText, rateShort, LEDGER_TYPE } from '../lib/format';
+import type { Investment, Balance, Branch, Profile, Plan, PlanVersion, Accrual, Payout, LedgerEntry } from '../lib/types';
 import { DataTable, Col } from '../ui/DataTable';
 import { Kpi, Empty, ErrorNote, Loading, PageHead, InvBadge, PayBadge, LedgerBadge, Badge, Drawer, Modal, Field, useAction } from '../ui/kit';
 import { Icon } from '../ui/Icon';
 
 const LIVE = ['active', 'matured', 'redemption_requested', 'redemption_processing'];
-type Lite = Pick<Profile, 'id' | 'full_name' | 'code' | 'email'>;
+type Lite = Pick<Profile, 'id' | 'full_name' | 'code' | 'email'> & { branch_id?: string | null };
 
 function addDays(iso: string, n: number): string {
   const d = new Date(iso + 'T00:00:00Z');
@@ -20,8 +20,6 @@ function addDays(iso: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 const outstandingOf = (b?: Balance) => (b ? Number(b.unapproved) + Number(b.approved) + Number(b.processing) : 0);
-const earlyText = (i: Pick<Investment, 'early_redemption' | 'early_fee_pct'>) =>
-  i.early_redemption === 'permitted_with_fee' ? `Permitted with a ${pct(i.early_fee_pct)} fee on principal` : EARLY_LABEL[i.early_redemption] || i.early_redemption;
 
 async function namesFor(ids: (string | null | undefined)[]): Promise<Record<string, Lite>> {
   const list = [...new Set(ids.filter((x): x is string => !!x))];
@@ -34,7 +32,7 @@ async function namesFor(ids: (string | null | undefined)[]): Promise<Record<stri
 }
 
 /* =============================== REGISTER =============================== */
-interface Row extends Investment { investor: Lite | undefined; bal: Balance | undefined; label: string; outstanding: number }
+interface Row extends Investment { investor: Lite | undefined; bal: Balance | undefined; label: string; outstanding: number; branch: string; branchCode: string }
 
 export function Investments() {
   const s = useSettings();
@@ -48,24 +46,39 @@ export function Investments() {
   };
 
   const q = useQuery(async () => {
-    const [invs, bal, people] = await Promise.all([
+    const [invs, bal, people, branches] = await Promise.all([
       fetchAll<Investment>((a, b) => supabase.from('investments').select('*').order('created_at', { ascending: false }).range(a, b)),
       fetchAll<Balance>((a, b) => supabase.from('investment_balances').select('*').range(a, b)),
-      fetchAll<Lite>((a, b) => supabase.from('profiles').select('id,full_name,code,email').range(a, b))
+      fetchAll<Lite>((a, b) => supabase.from('profiles').select('id,full_name,code,email,branch_id').range(a, b)),
+      supabase.from('branches').select('*').order('name').then(r => must(r) as Branch[])
     ]);
     const bm = new Map(bal.map(x => [x.investment_id, x]));
     const pm = new Map(people.map(x => [x.id, x]));
-    return invs.map<Row>(i => ({ ...i, investor: pm.get(i.investor_id), bal: bm.get(i.id), label: investmentLabel(i, s.approaching_days), outstanding: outstandingOf(bm.get(i.id)) }));
+    const bn = new Map(branches.map(b => [b.id, b]));
+    return {
+      branches,
+      rows: invs.map<Row>(i => {
+        const who = pm.get(i.investor_id);
+        const br = who?.branch_id ? bn.get(who.branch_id) : undefined;
+        return { ...i, investor: who, bal: bm.get(i.id), label: investmentLabel(i, s.approaching_days), outstanding: outstandingOf(bm.get(i.id)), branch: br?.name || '', branchCode: br?.code || '' };
+      })
+    };
   }, [s.approaching_days]);
 
-  const rows = q.data || [];
+  const all = q.data?.rows || [];
+  const branches = q.data?.branches || [];
+  const fRate = sp.get('rate') || '';
+  const fBranch = sp.get('branch') || '';
+  const setParam = (k: string, v: string) => { const n = new URLSearchParams(sp); if (v) n.set(k, v); else n.delete(k); setSp(n, { replace: true }); };
+  const rates = [...new Set(all.map(r => Number(r.monthly_rate)))].sort((a, b) => a - b);
+  const rows = all.filter(r => (!fRate || Number(r.monthly_rate) === Number(fRate)) && (!fBranch || (fBranch === 'none' ? !r.branchCode : r.branchCode === fBranch)));
   const t = today();
   const cols: Col<Row>[] = useMemo(() => [
     { h: 'Investment', v: r => r.code, r: r => <><b className="mono">{r.code}</b><span className="sub">{r.agreement_ref || '—'}</span></> },
-    { h: 'Investor', v: r => r.investor?.full_name || '', r: r => <>{r.investor?.full_name || '—'}<span className="sub">{r.investor?.code}</span></> },
+    { h: 'Investor', v: r => r.investor?.full_name || '', r: r => <>{r.investor?.full_name || '—'}<span className="sub">{r.investor?.code}{r.branch ? ' · ' + r.branch : ''}</span></> },
     { h: 'Plan', v: r => r.plan_name, r: r => <>{r.plan_name} <span className="muted mono">v{r.plan_version}</span><span className="sub">{rate(r.monthly_rate)}</span></> },
     { h: 'Principal', n: true, v: r => Number(r.principal), r: r => money(r.principal) },
-    { h: 'Lock-in', v: r => r.lockin_months, r: r => r.lockin_months + ' months' },
+    { h: 'Lock-in', v: r => r.lockin_months, r: r => lockinText(r.lockin_months) },
     { h: 'Start', v: r => r.start_date || '9999', r: r => (r.start_date ? date(r.start_date) : <span className="muted">Not funded</span>) },
     { h: 'Maturity', v: r => r.maturity_date || '9999', r: r => (r.maturity_date ? <>{date(r.maturity_date)}{LIVE.includes(r.status) && <span className="sub">{Math.max(0, daysBetween(t, r.maturity_date))} days</span>}</> : '—') },
     { h: 'Accrued', n: true, v: r => Number(r.bal?.accrued || 0), r: r => money(r.bal?.accrued || 0) },
@@ -76,8 +89,8 @@ export function Investments() {
 
   const livePrincipal = rows.filter(r => LIVE.includes(r.status)).reduce((x, r) => x + Number(r.principal), 0);
   const exportCsv = () => downloadCsv(`investments-${today()}`,
-    ['Investment', 'Investor ID', 'Investor', 'Plan', 'Version', 'Rate %/month', 'Principal', 'Monthly return', 'Lock-in months', 'Start', 'Maturity', 'Accrued', 'Paid', 'Outstanding', 'Status', 'Agreement ref', 'Deposit ref'],
-    rows.map(r => [r.code, r.investor?.code, r.investor?.full_name, r.plan_name, r.plan_version, r.monthly_rate, r.principal, r.monthly_return, r.lockin_months, r.start_date, r.maturity_date,
+    ['Investment', 'Investor ID', 'Investor', 'Branch', 'Plan', 'Version', 'Rate %/month', 'Principal', 'Monthly return', 'Lock-in months', 'Start', 'Maturity', 'Accrued', 'Paid', 'Outstanding', 'Status', 'Agreement ref', 'Deposit ref'],
+    rows.map(r => [r.code, r.investor?.code, r.investor?.full_name, r.branch, r.plan_name, r.plan_version, r.monthly_rate, r.principal, r.monthly_return, r.lockin_months, r.start_date, r.maturity_date,
       r.bal?.accrued ?? 0, r.bal?.paid ?? 0, r.outstanding, r.label, r.agreement_ref, r.deposit_ref]));
 
   return (
@@ -88,7 +101,7 @@ export function Investments() {
           <button className="btn" onClick={exportCsv} disabled={!rows.length}><Icon name="download" />Export CSV</button>
           <button className="btn accent" onClick={() => setOpen(true)}><Icon name="plus" />Record investment</button>
         </>} />
-      {q.error ? <ErrorNote msg={q.error} retry={q.reload} /> : !q.data ? <Loading /> : !rows.length ? (
+      {q.error ? <ErrorNote msg={q.error} retry={q.reload} /> : !q.data ? <Loading /> : !all.length ? (
         <div className="card"><div className="card-b">
           <Empty title="No investments yet">
             <span>Record an investment for a verified investor on an active plan. It becomes active when you confirm the deposit.</span>
@@ -96,10 +109,19 @@ export function Investments() {
           </Empty>
         </div></div>
       ) : (
-        <DataTable<Row> rows={rows} cols={cols} rowKey={r => r.id} searchPh="Search ID, investor, plan, reference" per={12}
-          text={r => `${r.investor?.code || ''} ${r.investor?.email || ''} ${r.deposit_ref} ${r.agreement_ref}`}
-          filters={[['All', 'all'], ['Pending funding', 'Pending funding'], ['Locked / active', 'Locked'], ['Maturity approaching', 'Maturity approaching'], ['Eligible', 'elig'], ['In redemption', 'red'], ['Redeemed', 'Redeemed'], ['Cancelled', 'Cancelled']]}
-          filterFn={(r, f) => f === 'all' || r.label === f || (f === 'elig' && (r.label === 'Eligible for redemption' || r.label === 'Matured')) || (f === 'red' && r.label.startsWith('Redemption'))}
+        <DataTable<Row> key={sp.get('f') || ''} rows={rows} cols={cols} rowKey={r => r.id} searchPh="Search ID, investor, plan, reference" per={12}
+          text={r => `${r.investor?.code || ''} ${r.investor?.email || ''} ${r.deposit_ref} ${r.agreement_ref} ${r.branch}`}
+          filters={[['All', 'all'], ['Pending funding', 'Pending funding'], ['Locked', 'locked'], ['Unlocking soon', 'Unlocking soon'], ['Unlocked', 'Unlocked'], ['Closed', 'Closed'], ['Cancelled', 'Cancelled']]}
+          filterFn={(r, f) => f === 'all' || r.label === f || (f === 'locked' && LIVE.includes(r.status) && !isUnlocked(r))}
+          initialFilter={sp.get('f') === 'unlocked' ? 'Unlocked' : sp.get('f') === 'locked' ? 'locked' : undefined}
+          tools={<>
+            <select className="input" style={{ width: 'auto' }} value={fRate} onChange={e => setParam('rate', e.target.value)} aria-label="Monthly ROI">
+              <option value="">All ROI rates</option>{rates.map(r => <option key={r} value={String(r)}>{rateShort(r)} monthly</option>)}
+            </select>
+            <select className="input" style={{ width: 'auto' }} value={fBranch} onChange={e => setParam('branch', e.target.value)} aria-label="Branch">
+              <option value="">All branches</option>{branches.map(b => <option key={b.id} value={b.code}>{b.name}</option>)}<option value="none">No branch</option>
+            </select>
+          </>}
           href={r => '/admin/investments/' + r.code} emptyTitle="No matching investments" />
       )}
       {open && <RecordInvestment preInvestor={sp.get('investor') || ''} onClose={close} onDone={code => { close(); if (code) nav('/admin/investments/' + code); }} />}
@@ -215,7 +237,7 @@ function RecordInvestment({ preInvestor, onClose, onDone }: { preInvestor: strin
           )}
           {pv && (
             <div className="note info">
-              <b>{plan?.name} v{pv.version}</b> · {rate(pv.monthly_rate)} · {money(pv.min_amount)} – {money(pv.max_amount)} · early redemption: {pv.early_redemption === 'permitted_with_fee' ? `${pct(pv.early_fee_pct)} fee` : EARLY_LABEL[pv.early_redemption]} · payout within {pv.payout_lag_days} days
+              <b>{plan?.name} v{pv.version}</b> · {rate(pv.monthly_rate)} · {money(pv.min_amount)} – {money(pv.max_amount)} · lock-in {pv.lockin_options.map(m => lockinText(m)).join(' or ')} · payout within {pv.payout_lag_days} days
             </div>
           )}
           <div className="f-row">
@@ -330,7 +352,7 @@ export function InvestmentDetail() {
           <button className="btn primary" onClick={() => setDlg('fund')}>Confirm deposit & activate</button>
         </> : !closed ? <button className="btn" onClick={() => setDlg('amend')}>Record amendment</button> : undefined}>
         <h1>{i.code} · {investor ? <Link to={'/admin/investors/' + investor.code}>{investor.full_name || investor.email}</Link> : '—'} <InvBadge i={i} approachingDays={s.approaching_days} /></h1>
-        <p>{i.plan_name} v{i.plan_version} · {i.lockin_months}-month lock-in · {i.start_date
+        <p>{i.plan_name} v{i.plan_version} · {lockinText(i.lockin_months)} lock-in · {i.start_date
           ? `started ${date(i.start_date)} · matures ${date(i.maturity_date)}${daysLeft != null && daysLeft > 0 && !closed ? ` (${daysLeft} days)` : ''}`
           : i.status === 'cancelled' ? `cancelled${i.cancelled_reason ? ': ' + i.cancelled_reason : ''}` : 'awaiting deposit confirmation'}</p>
       </PageHead>
@@ -358,15 +380,16 @@ export function InvestmentDetail() {
               {i.start_date && i.maturity_date ? (
                 <div className="track">
                   <div className="bar"><div className={'fill ' + (pctDone >= 100 ? 'done' : '')} style={{ width: pctDone + '%' }} /></div>
-                  <div className="lbls"><span>Start {dateShort(i.start_date)}</span><span>Requests from {dateShort(i.request_from_date)}</span><span>Maturity {date(i.maturity_date)}</span></div>
+                  <div className="lbls"><span>Start {dateShort(i.start_date)}</span><span>{isUnlocked(i) ? 'Principal unlocked' : `${pctDone}% of lock-in`}</span><span>Maturity {date(i.maturity_date)}</span></div>
                 </div>
               ) : <p className="hint">{i.status === 'cancelled' ? 'This investment was cancelled before funding.' : 'The lock-in starts on the date the deposit is confirmed.'}</p>}
               <dl className="kv">
                 <dt>Start date</dt><dd>{i.start_date ? date(i.start_date) : <span className="muted">Expected {date(i.expected_start)}</span>}</dd>
                 <dt>Lock-in end</dt><dd>{date(i.lockin_end_date)}</dd>
                 <dt>Maturity</dt><dd>{date(i.maturity_date)}</dd>
-                <dt>Redemption requests from</dt><dd>{date(i.request_from_date)}</dd>
-                {daysLeft != null && !closed && <><dt>Days to maturity</dt><dd>{Math.max(0, daysLeft)}</dd></>}
+                <dt>Lock-in period</dt><dd>{lockinText(i.lockin_months)}</dd>
+                <dt>Principal</dt><dd>{closed ? (i.status === 'cancelled' ? 'Cancelled' : 'Closed') : !i.lockin_end_date ? 'Not started' : isUnlocked(i) ? 'Unlocked' : 'Locked'}</dd>
+                {daysLeft != null && !closed && <><dt>Days to unlock</dt><dd>{Math.max(0, daysLeft)}</dd></>}
               </dl>
             </div>
           </div>
@@ -420,11 +443,10 @@ export function InvestmentDetail() {
                 <dt>Monthly ROI</dt><dd>{rate(i.monthly_rate)}</dd>
                 <dt>Method</dt><dd>Simple interest</dd>
                 <dt>Plan</dt><dd>{plan ? <Link to={'/admin/plans/' + plan.code}>{i.plan_name}</Link> : i.plan_name} · v{i.plan_version}</dd>
-                <dt>Lock-in</dt><dd>{i.lockin_months} months</dd>
+                <dt>Lock-in</dt><dd>{lockinText(i.lockin_months)}</dd>
                 <dt>Principal</dt><dd>{money(i.principal)}</dd>
                 <dt>Monthly return</dt><dd>{money(i.monthly_return)}</dd>
                 <dt>Total over lock-in</dt><dd>{money(Math.round(Number(i.monthly_return) * i.lockin_months * 100) / 100)}</dd>
-                <dt>Early redemption</dt><dd>{earlyText(i)}</dd>
                 <dt>Payout lag</dt><dd>{i.payout_lag_days} day{i.payout_lag_days === 1 ? '' : 's'} after accrual</dd>
                 <dt>Agreement</dt><dd className="mono">{i.agreement_ref || '—'}</dd>
                 <dt>Deposit reference</dt><dd className="mono">{i.deposit_ref || '—'}</dd>

@@ -132,8 +132,8 @@ export function Settings() {
             </Field>
           </div>
           <div className="f-row">
-            <Field label="“Maturity approaching” threshold (days)" err={e('approaching_days')} hint="Used for badges, reminders and the overview."><input className={'input ' + (e('approaching_days') ? 'bad' : '')} type="number" min={1} max={365} value={Number.isNaN(f.approaching_days) ? '' : f.approaching_days} onChange={num('approaching_days')} /></Field>
-            <Field label="Redemption request window (days before maturity)" err={e('request_window_days')} hint="Applies to investments activated after the change."><input className={'input ' + (e('request_window_days') ? 'bad' : '')} type="number" min={0} max={365} value={Number.isNaN(f.request_window_days) ? '' : f.request_window_days} onChange={num('request_window_days')} /></Field>
+            <Field label="“Unlocking soon” threshold (days)" err={e('approaching_days')} hint="How many days before a lock-in ends it shows as unlocking soon, on badges, reminders and the overview."><input className={'input ' + (e('approaching_days') ? 'bad' : '')} type="number" min={1} max={365} value={Number.isNaN(f.approaching_days) ? '' : f.approaching_days} onChange={num('approaching_days')} /></Field>
+            <div />
           </div>
           <div className="f-row">
             <Field label="Default payout lag (days after accrual)" err={e('default_payout_lag_days')} hint="Default for new plans. Each plan version can override it."><input className={'input ' + (e('default_payout_lag_days') ? 'bad' : '')} type="number" min={0} max={60} value={Number.isNaN(f.default_payout_lag_days) ? '' : f.default_payout_lag_days} onChange={num('default_payout_lag_days')} /></Field>
@@ -165,7 +165,7 @@ export function Settings() {
           <label className="check"><input type="checkbox" checked={f.four_eyes} onChange={ev => set('four_eyes', ev.target.checked)} /> Four-eyes control: require a second Super Admin</label>
           <div className="note info">
             With four-eyes on, the admin who performed a step cannot perform the approving step: confirming a deposit you recorded, confirming payouts you sent to the bank,
-            settling a redemption you approved, and approving an amendment you recorded. It only applies when there is more than one active Super Admin.
+            and approving an amendment you recorded. It only applies when there is more than one active Super Admin.
           </div>
         </div>}
 
@@ -301,7 +301,7 @@ function AddAdmin({ onClose }: { onClose: () => void }) {
         <Field label="Full name *" err={tried ? errs.name : null}><input className="input" value={name} onChange={e => setName(e.target.value)} /></Field>
         <Field label="Email *" err={tried ? errs.email : null}><input className="input" type="email" value={email} onChange={e => setEmail(e.target.value)} /></Field>
         {mode === 'password' && <Field label="Temporary password *" err={tried ? errs.pw : null} hint="At least 10 characters."><input className="input mono" value={pw} onChange={e => setPw(e.target.value)} autoComplete="new-password" /></Field>}
-        <div className="note">Administrators can move money: record and activate investments, confirm payouts and settle redemptions. Ask them to turn on two-factor authentication.</div>
+        <div className="note">Administrators can move money: record and activate investments and confirm payouts. Ask them to turn on two-factor authentication.</div>
       </div>
     </Drawer>
   );

@@ -114,7 +114,7 @@ export function Accruals() {
             <Kpi label="Accrued this month" value={money(thisMonth.reduce((s, r) => s + Number(r.amount), 0))} sub={`${thisMonth.length} accrual entr${thisMonth.length === 1 ? 'y' : 'ies'}`} />
             <Kpi label="Accrued to date" value={moneyShort(d?.accrued_total)} sub="Net of reversals" tip="Sum of every accrual entry, including reversing entries. Accrued is not the same as paid." />
             <Kpi label="Reversed" value={money(d?.reversed_total)} cls={Number(d?.reversed_total) < 0 ? 'neg' : ''} sub={`${reversals.length} reversing entr${reversals.length === 1 ? 'y' : 'ies'}`} />
-            <Kpi label="Investments accruing" value={accruing.length} sub={`${money(accruing.reduce((s, i) => s + Number(i.monthly_return), 0))} per month`} tip="Active investments (including those with a redemption in progress) that still earn monthly returns." />
+            <Kpi label="Investments accruing" value={accruing.length} sub={`${money(accruing.reduce((s, i) => s + Number(i.monthly_return), 0))} per month`} tip="Investments inside their lock-in that still earn monthly returns." />
           </div>
           <div className="note info">
             <b>How returns accrue.</b> Monthly return = original principal × monthly ROI ÷ 100, rounded to 2 decimals per entry. It is simple interest on the original

@@ -92,7 +92,7 @@ export function Statement() {
                     ))}
                     <tr>
                       <td colSpan={3}><b>Total</b></td>
-                      <td className="n"><b>{money(rows.filter(r => !['redeemed'].includes(r.i.status)).reduce((s, r) => s + Number(r.i.principal), 0))}</b><span className="sub">not yet redeemed</span></td>
+                      <td className="n"><b>{money(rows.filter(r => !['redeemed'].includes(r.i.status)).reduce((s, r) => s + Number(r.i.principal), 0))}</b><span className="sub">open investments</span></td>
                       <td className="n"><b>{money(tot('opening'))}</b></td><td className="n"><b>{money(tot('accrued'))}</b></td><td className="n"><b>{money(tot('paid'))}</b></td><td className="n"><b>{money(tot('closing'))}</b></td>
                     </tr>
                   </tbody>
