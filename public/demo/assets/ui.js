@@ -43,13 +43,13 @@
   const kpi = (label, value, sub, opts = {}) => `<div class="kpi"><div class="kpi-l">${esc(label)}${opts.tip ? tip(opts.tip) : ''}</div><div class="kpi-v ${opts.cls || ''}" title="${esc(value)}">${value}</div>${sub ? `<div class="kpi-s ${opts.subCls || ''}">${sub}</div>` : ''}</div>`;
 
   /* ---------- shell ---------- */
+  const LOGO = '<svg viewBox="0 0 120 120" fill="none" aria-hidden="true"><rect x="10" y="8" width="13" height="100" rx="2" fill="#C9A96E"/><path d="M23 8 Q72 8 72 38 Q72 68 23 68" stroke="#C9A96E" stroke-width="13" fill="none" stroke-linecap="round" stroke-linejoin="round"/><rect x="38" y="44" width="10" height="64" rx="2" fill="#C9A96E"/><path d="M48 44 Q82 44 82 62 Q82 80 48 80" stroke="#C9A96E" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M62 75 L95 108" stroke="#C9A96E" stroke-width="11" stroke-linecap="round"/></svg>';
   function shell(cfg) {
     const collapsed = (() => { try { return localStorage.getItem('pms-side') === '1'; } catch (e) { return false; } })();
     document.body.innerHTML = `
-      <div class="demo-bar">Demo with sample data. Your changes are saved on this device. <a data-act="reset-demo">Reset sample data</a> · <a href="index.html">Switch account</a></div>
       <div class="shell ${collapsed ? 'collapsed' : ''}" id="shell">
         <aside class="sidebar" id="sidebar">
-          <div class="brand"><div class="logo">${P.BRAND.short}</div><div class="brand-txt"><b>${P.BRAND.name}</b><small>${esc(cfg.roleLabel)}</small></div></div>
+          <div class="brand"><div class="logo">${LOGO}</div><div class="brand-txt"><b>${P.BRAND.name}</b><small>${esc(cfg.roleLabel)}</small></div></div>
           <nav id="nav">${cfg.nav.map(n => n.group ? `<div class="nav-grp">${n.group}</div>` : `<a class="nav-a" data-route="${n.route}" href="#/${n.route}" title="${esc(n.label)}">${icon(n.icon)}<span>${esc(n.label)}</span>${n.count ? `<em class="ct" data-count="${n.route}"></em>` : ''}</a>`).join('')}</nav>
           <div class="side-foot"><div class="avatar">${cfg.user.initials}</div><div class="who"><b>${esc(cfg.user.name)}</b><small>${esc(cfg.user.sub)}</small></div></div>
         </aside>
@@ -106,7 +106,9 @@
     else if (a === 'doc-download') { if (curDoc) { const l = document.createElement('a'); l.href = URL.createObjectURL(new Blob([docFile()], { type: 'text/html' })); l.download = curDoc.file + '.html'; document.body.appendChild(l); l.click(); l.remove(); toast('Downloaded', curDoc.file + '.html'); } }
     else if (a === 'doc-print') { if (curDoc) { const w = window.open('', '_blank'); if (!w) { toast('Allow pop-ups to print', 'Your browser blocked the print window.', 'warn'); return; } w.document.write(docFile()); w.document.close(); w.focus(); setTimeout(() => w.print(), 300); } }
     else if (a === 'reset-demo') { P.reset(); toast('Demo data reset', 'All sample data is back to its starting state.'); setTimeout(() => location.reload(), 600); }
-    else if (a === 'user-menu') { const pop = document.getElementById('user-pop'); if (pop.innerHTML) { closePops(); return; } closePops(); pop.innerHTML = `<div class="popover" style="width:220px"><div class="pl" style="padding:6px"><a class="nav-a" style="color:var(--fg)" href="index.html">${icon('logout')}<span>Sign out</span></a></div></div>`; }
+    else if (a === 'user-menu') { const pop = document.getElementById('user-pop'); if (pop.innerHTML) { closePops(); return; } closePops(); const ses = (window.PMSAuth && PMSAuth.read()) || {};
+      pop.innerHTML = `<div class="popover" style="width:260px"><div class="ph2"><div><b>${esc(UI.me ? UI.me.name : '')}</b><div class="hint">${esc(ses.email || '')}</div></div></div><div class="pl" style="padding:6px">${UI.profileRoute ? `<a class="nav-a" href="#/${UI.profileRoute}">${icon('user')}<span>Profile & security</span></a>` : ''}<a class="nav-a" data-act="reset-demo">${icon('back')}<span>Reset sample data</span></a><a class="nav-a" data-act="sign-out">${icon('logout')}<span>Sign out</span></a></div></div>`; }
+    else if (a === 'sign-out') { if (window.PMSAuth) PMSAuth.signOut(); else location.href = 'index.html'; }
     else if (UI.actions[a]) UI.actions[a](t, e);
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeOverlay(); closePops(); } });
@@ -185,41 +187,107 @@
   }
 
   /* ---------- charts (inline SVG) ---------- */
-  // series: [{name, color, values:[]}], labels: []
-  function barChart(labels, series, opts = {}) {
-    const W = opts.w || 640, H = opts.h || 220, L = 52, B = 26, T = 10, R = 8;
-    const max = niceMax(Math.max(1, ...series.flatMap(s => s.values)));
-    const iw = W - L - R, ih = H - T - B, gw = iw / labels.length, bw = Math.min(28, (gw - 12) / series.length);
-    const y = v => T + ih - (v / max) * ih;
-    let g = '';
-    for (let i = 0; i <= 4; i++) { const v = max * i / 4; g += `<line class="gl" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${opts.fmt ? opts.fmt(v) : v}</text>`; }
+  // chart(labels, series, opts): series = [{ name, color, values, kind: 'bar' | 'area' | 'line', axis: 'left' | 'right' }]
+  // opts: { stack, h, w, fmt, fmtR, tipFmt, label }. Hovering a month shows every series for that month.
+  let chartSeq = 0;
+  function chart(labels, series, opts = {}) {
+    const id = 'ch' + (++chartSeq);
+    const W = opts.w || 680, H = opts.h || 250, T = 14, B = 30, L = 58;
+    const hasR = series.some(s => s.axis === 'right'), R = hasR ? 58 : 12;
+    const iw = W - L - R, ih = H - T - B, n = labels.length, gw = iw / n;
+    const left = series.filter(s => s.axis !== 'right'), right = series.filter(s => s.axis === 'right');
+    const bars = left.filter(s => s.kind === 'bar' || !s.kind);
+    const stackTotals = labels.map((_, i) => bars.reduce((t, s) => t + (s.values[i] || 0), 0));
+    const leftVals = (opts.stack ? stackTotals : []).concat(left.flatMap(s => s.values));
+    // Round axis steps (1, 2 or 5 × 10^n) so labels read ₹10k, ₹20k… rather than ₹6,250.
+    const nice = v => { const p = Math.pow(10, Math.floor(Math.log10(v))); const f = v / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; };
+    const stepL = nice(Math.max(1, ...leftVals) / 4), nL = Math.max(1, Math.ceil(Math.max(1, ...leftVals) / stepL)), maxL = stepL * nL;
+    const rawR = hasR ? Math.max(1, ...right.flatMap(s => s.values)) : 1, stepR = hasR ? rawR / nL : 1, maxR = hasR ? nice(stepR) * nL : 1;
+    const yL = v => T + ih - (v / maxL) * ih, yR = v => T + ih - (v / maxR) * ih;
+    const cx = i => L + gw * i + gw / 2;
+    let defs = '', g = '';
+    for (let k = 0; k <= nL; k++) {
+      const v = stepL * k; g += `<line class="gl${k === 0 ? ' base' : ''}" x1="${L}" x2="${W - R}" y1="${yL(v)}" y2="${yL(v)}"/><text x="${L - 10}" y="${yL(v) + 4}" text-anchor="end">${opts.fmt ? opts.fmt(v) : v}</text>`;
+      if (hasR) { const r = maxR * k / nL; g += `<text x="${W - R + 10}" y="${yR(r) + 4}" text-anchor="start">${(opts.fmtR || opts.fmt || String)(r)}</text>`; }
+    }
+    // bars: grouped side by side, or stacked when opts.stack
+    const groups = opts.stack ? 1 : bars.length, bw = Math.max(6, Math.min(opts.stack ? 34 : 22, (gw - 14) / Math.max(1, groups) - (groups > 1 ? 4 : 0)));
     labels.forEach((lb, i) => {
-      const x0 = L + gw * i + (gw - bw * series.length - 3 * (series.length - 1)) / 2;
-      series.forEach((s, j) => { const v = s.values[i]; const h = Math.max(v > 0 ? 2 : 0, (v / max) * ih);
-        g += `<rect class="bar" x="${x0 + j * (bw + 3)}" y="${T + ih - h}" width="${bw}" height="${h}" rx="3" fill="${s.color}" ${s.dash ? 'fill-opacity=".25" stroke="' + s.color + '" stroke-dasharray="3 2"' : ''} data-tip="${esc(s.name + ' · ' + lb + ': ' + (opts.tipFmt || opts.fmt || String)(v))}"/>`; });
-      g += `<text x="${L + gw * i + gw / 2}" y="${H - 8}" text-anchor="middle">${esc(lb)}</text>`;
+      let base = 0;
+      bars.forEach((s, j) => {
+        const v = s.values[i] || 0; if (v <= 0) return;
+        const x = opts.stack ? cx(i) - bw / 2 : cx(i) - (groups * bw + (groups - 1) * 4) / 2 + j * (bw + 4);
+        const y0 = yL(base + (opts.stack ? 0 : 0)), y1 = opts.stack ? yL(base + v) : yL(v), top = opts.stack ? y1 : y1, bot = opts.stack ? y0 : yL(0);
+        const isTop = !opts.stack || j === bars.length - 1 || bars.slice(j + 1).every(t => !(t.values[i] > 0));
+        const h = Math.max(2, bot - top), r = isTop ? Math.min(6, bw / 2, h) : 0;
+        g += `<path class="bar" fill="${s.color}" d="M${x},${bot} V${bot - h + r} Q${x},${bot - h} ${x + r},${bot - h} H${x + bw - r} Q${x + bw},${bot - h} ${x + bw},${bot - h + r} V${bot} Z"/>`;
+        if (opts.stack) base += v;
+      });
     });
-    return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.label || 'Chart')}">${g}</svg></div>`;
+    // areas and lines with smooth curves
+    series.filter(s => s.kind === 'area' || s.kind === 'line').forEach((s, j) => {
+      const y = s.axis === 'right' ? yR : yL; const pts = s.values.map((v, i) => [cx(i), y(v || 0)]);
+      const d = smooth(pts);
+      if (s.kind === 'area') {
+        defs += `<linearGradient id="${id}g${j}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${s.color}" stop-opacity=".28"/><stop offset="1" stop-color="${s.color}" stop-opacity="0"/></linearGradient>`;
+        g += `<path d="${d} L${pts[pts.length - 1][0]},${T + ih} L${pts[0][0]},${T + ih} Z" fill="url(#${id}g${j})"/>`;
+      }
+      g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" ${s.dash ? 'stroke-dasharray="5 5"' : ''}/>`;
+      pts.forEach(p => { g += `<circle class="pt" cx="${p[0]}" cy="${p[1]}" r="3.5" fill="var(--surface)" stroke="${s.color}" stroke-width="2"/>`; });
+    });
+    labels.forEach((lb, i) => {
+      g += `<text x="${cx(i)}" y="${H - 9}" text-anchor="middle">${esc(lb)}</text>`;
+      const tipRows = series.map(s => [s.name, (s.axis === 'right' ? (opts.tipFmtR || opts.tipFmt || opts.fmtR || opts.fmt || String) : (opts.tipFmt || opts.fmt || String))(s.values[i] || 0), s.color]);
+      g += `<rect class="hit" x="${L + gw * i}" y="${T}" width="${gw}" height="${ih}" fill="transparent" data-x="${cx(i)}" data-title="${esc(opts.tipTitle ? opts.tipTitle(i) : lb)}" data-rows="${esc(JSON.stringify(tipRows))}"/>`;
+    });
+    g += `<line class="guide" x1="0" x2="0" y1="${T}" y2="${T + ih}" style="display:none"/>`;
+    return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.label || 'Chart')}"><defs>${defs}</defs>${g}</svg></div>`;
   }
+  function smooth(p) {
+    if (p.length < 2) return p.length ? `M${p[0][0]},${p[0][1]}` : '';
+    let d = `M${p[0][0]},${p[0][1]}`;
+    for (let i = 0; i < p.length - 1; i++) {
+      const p0 = p[i - 1] || p[i], p1 = p[i], p2 = p[i + 1], p3 = p[i + 2] || p2, t = 0.18;
+      const c1 = [p1[0] + (p2[0] - p0[0]) * t, p1[1] + (p2[1] - p0[1]) * t], c2 = [p2[0] - (p3[0] - p1[0]) * t, p2[1] - (p3[1] - p1[1]) * t];
+      const lo = Math.max(p1[1], p2[1]), hi = Math.min(p1[1], p2[1]); c1[1] = Math.min(Math.max(c1[1], hi), lo); c2[1] = Math.min(Math.max(c2[1], hi), lo);
+      d += ` C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${p2[0]},${p2[1]}`;
+    }
+    return d;
+  }
+  const barChart = (labels, series, opts = {}) => chart(labels, series.map(s => Object.assign({ kind: 'bar' }, s)), opts);
   function niceMax(v) { const p = Math.pow(10, Math.floor(Math.log10(v))); const n = v / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p; }
   function donut(parts, opts = {}) {
-    const total = parts.reduce((s, p) => s + p.value, 0) || 1; const r = 54, c = 2 * Math.PI * r; let off = 0;
-    const arcs = parts.map(p => { const len = c * p.value / total; const s = `<circle r="${r}" cx="70" cy="70" fill="none" stroke="${p.color}" stroke-width="18" stroke-dasharray="${len} ${c - len}" stroke-dashoffset="${-off}" transform="rotate(-90 70 70)"><title>${esc(p.name)}</title></circle>`; off += len; return s; }).join('');
-    return `<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap"><svg viewBox="0 0 140 140" width="140" height="140" role="img" aria-label="${esc(opts.label || '')}"><circle r="${r}" cx="70" cy="70" fill="none" stroke="var(--surface-2)" stroke-width="18"/>${arcs}<text x="70" y="66" text-anchor="middle" style="font-size:11px;fill:var(--fg-3)">${esc(opts.center1 || '')}</text><text x="70" y="84" text-anchor="middle" style="font-size:15px;font-weight:600;fill:var(--fg)">${esc(opts.center2 || '')}</text></svg>
-      <div style="display:grid;gap:8px;font-size:13px;flex:1;min-width:150px">${parts.map(p => `<div style="display:flex;gap:8px;align-items:center"><i style="width:10px;height:10px;border-radius:3px;background:${p.color};flex:none"></i><span style="flex:1">${esc(p.name)}</span><b class="num" style="font-weight:500">${opts.fmt ? opts.fmt(p.value) : p.value}</b></div>`).join('')}</div></div>`;
+    parts = parts.filter(p => p.value > 0);
+    const total = parts.reduce((s, p) => s + p.value, 0) || 1; const r = 56, c = 2 * Math.PI * r, gap = parts.length > 1 ? 4 : 0; let off = 0;
+    const arcs = parts.map(p => { const len = Math.max(0, c * p.value / total - gap); const s = `<circle r="${r}" cx="75" cy="75" fill="none" stroke="${p.color}" stroke-width="16" stroke-linecap="butt" stroke-dasharray="${len} ${c - len}" stroke-dashoffset="${-off}" transform="rotate(-90 75 75)"><title>${esc(p.name + ': ' + (opts.fmt ? opts.fmt(p.value) : p.value))}</title></circle>`; off += len + gap; return s; }).join('');
+    return `<div class="donut"><svg viewBox="0 0 150 150" width="150" height="150" role="img" aria-label="${esc(opts.label || '')}"><circle r="${r}" cx="75" cy="75" fill="none" stroke="var(--surface-2)" stroke-width="16"/>${arcs}<text x="75" y="70" text-anchor="middle" class="d1">${esc(opts.center1 || '')}</text><text x="75" y="90" text-anchor="middle" class="d2">${esc(opts.center2 || '')}</text></svg>
+      <div class="donut-l">${parts.map(p => `<div><i style="background:${p.color}"></i><span>${esc(p.name)}<small>${Math.round(p.value / total * 100)}% of total</small></span><b class="num">${opts.fmt ? opts.fmt(p.value) : p.value}</b></div>`).join('')}</div></div>`;
   }
   let ctip;
   function bindCharts(root) {
-    root.querySelectorAll('rect.bar[data-tip]').forEach(r => {
-      r.addEventListener('mousemove', e => { if (!ctip) { ctip = document.createElement('div'); ctip.className = 'ctip'; document.body.appendChild(ctip); } ctip.textContent = r.dataset.tip; ctip.style.display = 'block'; ctip.style.left = (e.clientX + 12) + 'px'; ctip.style.top = (e.clientY - 34) + 'px'; });
-      r.addEventListener('mouseleave', () => { if (ctip) ctip.style.display = 'none'; });
+    root.querySelectorAll('.chart svg').forEach(svg => {
+      const guide = svg.querySelector('.guide');
+      svg.querySelectorAll('rect.hit').forEach(r => {
+        r.addEventListener('mousemove', e => {
+          if (!ctip) { ctip = document.createElement('div'); ctip.className = 'ctip'; document.body.appendChild(ctip); }
+          const rows = JSON.parse(r.dataset.rows);
+          ctip.innerHTML = `<b>${esc(r.dataset.title)}</b>` + rows.map(x => `<div><i style="background:${x[2]}"></i><span>${esc(x[0])}</span><em>${esc(x[1])}</em></div>`).join('');
+          ctip.style.display = 'block';
+          const w = ctip.offsetWidth; ctip.style.left = Math.min(e.clientX + 14, innerWidth - w - 8) + 'px'; ctip.style.top = (e.clientY - 20) + 'px';
+          if (guide) { guide.setAttribute('x1', r.dataset.x); guide.setAttribute('x2', r.dataset.x); guide.style.display = ''; }
+        });
+        r.addEventListener('mouseleave', () => { if (ctip) ctip.style.display = 'none'; if (guide) guide.style.display = 'none'; });
+      });
     });
   }
 
   /* ---------- monthly series helper ---------- */
   function lastMonths(n) { const out = []; let [y, m] = P.TODAY.split('-').map(Number); for (let i = n - 1; i >= 0; i--) { let mm = m - i, yy = y; while (mm < 1) { mm += 12; yy--; } out.push(yy + '-' + String(mm).padStart(2, '0')); } return out; }
+  const monthEnd = ym => { const [y, m] = ym.split('-').map(Number); return ym + '-' + String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0'); };
+  // Label the current month as partial so a short bar is not mistaken for a drop.
+  const monthTitle = ym => P.MONTHS[+ym.slice(5) - 1] + ' ' + ym.slice(0, 4) + (ym === P.TODAY.slice(0, 7) ? ' (to ' + P.fmtDateShort(P.TODAY) + ')' : '');
   const monthLabel = ym => P.MONTHS[+ym.slice(5) - 1] + (ym.slice(5) === '01' ? ' ' + ym.slice(2, 4) : '');
 
-  const UI = { docView, docHead, docTable, statement, kycDoc, esc, icon, badge, invBadge, payBadge, txnBadge, redBadge, tip, kpi, shell, router, nav, drawer, modal, closeOverlay, toast, table, renderTable, bindTables, barChart, donut, lastMonths, monthLabel, actions: {}, closePops };
+  const UI = { monthEnd, monthTitle, chart, LOGO, docView, docHead, docTable, statement, kycDoc, esc, icon, badge, invBadge, payBadge, txnBadge, redBadge, tip, kpi, shell, router, nav, drawer, modal, closeOverlay, toast, table, renderTable, bindTables, barChart, donut, lastMonths, monthLabel, actions: {}, closePops };
   window.UI = UI;
 })();

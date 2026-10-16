@@ -3,7 +3,7 @@
    prototype works by double-clicking index.html. All data is fictional. */
 (function () {
   const TODAY = '2026-10-14';
-  const BRAND = { name: 'Aster Capital', short: 'A', currency: 'INR', locale: 'en-IN', tz: 'Asia/Kolkata', approachingDays: 60 };
+  const BRAND = { name: 'Parva Realty', short: 'PR', currency: 'INR', locale: 'en-IN', tz: 'Asia/Kolkata', approachingDays: 60 };
 
   /* ---------- dates (all business dates are YYYY-MM-DD strings) ---------- */
   const pad = n => String(n).padStart(2, '0');

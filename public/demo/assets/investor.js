@@ -1,8 +1,9 @@
 /* PMS prototype — Investor dashboard (signed in as Ananya Rao) */
 (function () {
   const P = window.PMS, U = window.UI, esc = U.esc, M = P.fmtMoney, D = P.fmtDate;
+  if (!window.PMSAuth || !PMSAuth.require('investor')) return;
   const ME_ID = 'INVR-1001'; const me = P.invBy(ME_ID);
-  const ME = { name: me.name, initials: 'AR', sub: me.id + ' · Verified' };
+  const ME = { name: me.name, initials: 'AR', sub: me.id + ' · Verified' }; U.me = ME; U.profileRoute = 'profile';
 
   U.shell({
     roleLabel: 'Investor portal', searchPh: 'Search my investments and transactions', user: ME,
@@ -66,12 +67,12 @@
       </div>
       <div class="grid g-1-2">
         <div class="card"><div class="card-h"><h3>Lock-in progress</h3><div class="r"><a href="#/lockin">Tracker</a></div></div><div class="card-b" style="display:grid;gap:18px">${live.map(i => tracker(i, true)).join('')}</div></div>
-        <div class="card"><div class="card-h"><h3>Monthly returns</h3><div class="r legend"><span><i style="background:var(--green)"></i>Paid</span><span><i style="background:var(--amber)"></i>Processing / approved</span><span><i style="background:var(--chart-4)"></i>Accrued</span></div></div>
-          <div class="card-b">${U.barChart(months.map(U.monthLabel), [
-            { name: 'Paid', color: 'var(--green)', values: months.map(mm => accs.filter(a => a.end.slice(0, 7) === mm && a.pay.status === 'paid').reduce((s, a) => s + a.amount, 0)) },
-            { name: 'Processing / approved', color: 'var(--amber)', values: months.map(mm => accs.filter(a => a.end.slice(0, 7) === mm && ['processing', 'approved'].includes(a.pay.status)).reduce((s, a) => s + a.amount, 0)) },
-            { name: 'Accrued', color: 'var(--chart-4)', values: months.map(mm => accs.filter(a => a.end.slice(0, 7) === mm && a.pay.status === 'accrued').reduce((s, a) => s + a.amount, 0)) }
-          ], { fmt: v => '₹' + (v >= 1000 ? Math.round(v / 1000) + 'k' : v), tipFmt: M, label: 'My monthly returns by accrual month' })}</div></div>
+        <div class="card"><div class="card-h"><h3>Monthly returns</h3><div class="r legend"><span><i style="background:var(--chart-1)"></i>Paid</span><span><i style="background:var(--chart-2)"></i>Being processed</span><span><i style="background:var(--chart-4)"></i>Earned, not yet paid</span></div></div>
+          <div class="card-b">${U.chart(months.map(U.monthLabel), [
+            { name: 'Paid', color: 'var(--chart-1)', kind: 'bar', values: months.map(mm => accs.filter(a => a.end.slice(0, 7) === mm && a.pay.status === 'paid').reduce((s, a) => s + a.amount, 0)) },
+            { name: 'Being processed', color: 'var(--chart-2)', kind: 'bar', values: months.map(mm => accs.filter(a => a.end.slice(0, 7) === mm && ['processing', 'approved'].includes(a.pay.status)).reduce((s, a) => s + a.amount, 0)) },
+            { name: 'Earned, not yet paid', color: 'var(--chart-4)', kind: 'bar', values: months.map(mm => accs.filter(a => a.end.slice(0, 7) === mm && a.pay.status === 'accrued').reduce((s, a) => s + a.amount, 0)) }
+          ], { stack: true, fmt: v => '₹' + (v >= 1000 ? Math.round(v / 1000) + 'k' : v), tipFmt: M, tipTitle: i => U.monthTitle(months[i]), label: 'My monthly returns by month earned' })}</div></div>
       </div>
       <p class="hint">Rates are contractual monthly rates under your agreement. Projected values are estimates and are not guaranteed.</p>`;
   }
@@ -141,8 +142,8 @@
     return `${crumb('Monthly Returns')}<div class="ph"><div><h1>Monthly returns</h1><p>Simple interest: each month's return is your original principal × your contract rate. Returns are never added to principal.</p></div></div>
       <div class="kpis">${U.kpi('Accrued', M(tot(['accrued'])), 'Earned, not yet approved', { tip: 'Returns recorded for completed months, waiting for approval.' })}${U.kpi('Approved', M(tot(['approved'])), 'Scheduled for payment', { tip: 'Approved for payment but not yet sent to the bank.' })}${U.kpi('Processing', M(tot(['processing'])), 'Sent to bank', { subCls: 'warn', tip: 'Sent for payment. Shown as paid only once confirmed.' })}${U.kpi('Paid', M(tot(['paid'])), 'Confirmed', { cls: 'pos' })}${U.kpi('Projected', M(projected), 'Estimate to maturity', { subCls: 'warn', tip: 'Remaining returns at your contract rates if nothing changes. Not guaranteed.' })}</div>
       <div class="grid g-2-1">
-        <div class="card"><div class="card-h"><h3>Historical monthly returns</h3><div class="r">by accrual month</div></div><div class="card-b">${U.barChart(months.map(U.monthLabel), [{ name: 'Accrued in month', color: 'var(--chart-2)', values: sums }, { name: 'Cumulative', color: 'var(--chart-4)', values: cumS }], { fmt: v => '₹' + (v >= 100000 ? (v / 100000).toFixed(1) + 'L' : v >= 1000 ? Math.round(v / 1000) + 'k' : v), tipFmt: M, label: 'Monthly and cumulative returns' })}<div class="legend" style="margin-top:8px"><span><i style="background:var(--chart-2)"></i>Accrued in month</span><span><i style="background:var(--chart-4)"></i>Cumulative</span></div></div></div>
-        <div class="card"><div class="card-h"><h3>Principal vs returns</h3></div><div class="card-b">${U.donut([{ name: 'Principal', value: principal, color: 'var(--chart-1)' }, { name: 'Returns received', value: tot(['paid']), color: 'var(--green)' }, { name: 'Returns not yet paid', value: tot(['accrued', 'approved', 'processing']), color: 'var(--amber)' }], { fmt: M, center1: 'Total value', center2: P.fmtShort(principal + accs.reduce((s, a) => s + a.amount, 0)), label: 'Principal versus returns' })}</div></div>
+        <div class="card"><div class="card-h"><h3>Historical monthly returns</h3><div class="r">by accrual month</div></div><div class="card-b">${U.chart(months.map(U.monthLabel), [{ name: 'Earned in month', color: 'var(--chart-1)', values: sums, kind: 'bar' }, { name: 'Total earned so far', color: 'var(--chart-2)', values: cumS, kind: 'area', axis: 'right' }], { tipTitle: i => U.monthTitle(months[i]), fmtR: v => v === 0 ? '₹0' : '₹' + (v >= 100000 ? (v / 100000).toFixed(1) + 'L' : Math.round(v / 1000) + 'k'), fmt: v => '₹' + (v >= 100000 ? (v / 100000).toFixed(1) + 'L' : v >= 1000 ? Math.round(v / 1000) + 'k' : v), tipFmt: M, label: 'Monthly and cumulative returns' })}<div class="legend" style="margin-top:8px"><span><i style="background:var(--chart-1)"></i>Earned in month</span><span><i class="ln" style="background:var(--chart-2)"></i>Total earned so far</span></div></div></div>
+        <div class="card"><div class="card-h"><h3>Principal vs returns</h3></div><div class="card-b">${U.donut([{ name: 'Principal', value: principal, color: 'var(--chart-1)' }, { name: 'Returns received', value: tot(['paid']), color: 'var(--chart-2)' }, { name: 'Returns not yet paid', value: tot(['accrued', 'approved', 'processing']), color: 'var(--chart-3)' }], { fmt: M, center1: 'Total value', center2: P.fmtShort(principal + accs.reduce((s, a) => s + a.amount, 0)), label: 'Principal versus returns' })}</div></div>
       </div>
       <div class="card"><div class="card-h"><h3>Performance by investment</h3></div><div class="tbl"><table><thead><tr><th>Investment</th><th>Rate</th><th class="n">Principal</th><th class="n">Monthly return</th><th class="n">Months accrued</th><th class="n">Accrued</th><th class="n">Paid</th><th class="n">Not yet paid</th><th class="n">Projected (est.)</th><th class="n">Return on principal</th></tr></thead><tbody>
         ${m.map(i => `<tr class="click" data-go="investments/${i.code}"><td class="m">${i.code}</td><td>${P.fmtRate(i.rate)}</td><td class="n">${M(i.principal)}</td><td class="n">${M(i.monthly)}</td><td class="n">${i.accruals.length} / ${i.lockin}</td><td class="n">${M(i.accrued)}</td><td class="n pos">${M(i.paid)}</td><td class="n">${M(i.outstanding)}</td><td class="n muted">${M(i.projected)}</td><td class="n">${(i.accrued / i.principal * 100).toFixed(2)}%</td></tr>`).join('')}
@@ -236,7 +237,7 @@
             <div><div class="grow"><b>Safari on iPhone · Bengaluru</b><span>Last active 2 days ago</span></div><button class="btn sm danger" data-act="signout-s">Sign out</button></div></div></div>
           <div class="card"><div class="card-h"><h3>Notification preferences</h3></div><div class="card-b" style="display:grid;gap:10px">
             ${['Payout confirmations', 'Monthly accruals', 'Maturity reminders', 'Announcements', 'Redemption updates'].map((x, ix) => `<div style="display:flex;justify-content:space-between;font-size:13px"><span>${x}</span><span style="display:flex;gap:14px"><label class="check"><input type="checkbox" checked disabled> In-app</label><label class="check"><input type="checkbox" ${ix !== 1 ? 'checked' : ''}> Email</label></span></div>`).join('')}</div></div>
-          <a class="btn danger" href="index.html">${U.icon('logout')}Sign out</a>
+          <button class="btn danger" data-act="sign-out">${U.icon('logout')}Sign out</button>
         </div>
       </div>`;
   }

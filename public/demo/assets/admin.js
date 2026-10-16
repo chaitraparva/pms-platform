@@ -1,7 +1,8 @@
 /* PMS prototype — Super Admin dashboard */
 (function () {
   const P = window.PMS, U = window.UI, esc = U.esc, M = P.fmtMoney, D = P.fmtDate, S = P.fmtShort;
-  const ME = { name: 'Priya Sharma', initials: 'PS', sub: 'Super Admin' };
+  if (!window.PMSAuth || !PMSAuth.require('admin')) return;
+  const ME = { name: 'Chaitra', initials: 'CH', sub: 'Super Admin' }; U.me = ME; U.profileRoute = 'settings';
   const CHECKER = 'Karan Mehta';
 
   U.shell({
@@ -55,16 +56,21 @@
     const maturing = live.filter(i => i.daysLeft !== null && i.daysLeft <= 60 && i.daysLeft > 0);
     const pendRed = reds().filter(r => ['requested', 'under_review', 'approved', 'processing'].includes(r.status));
     const activePlans = P.plans().filter(p => p.status === 'active').length;
-    const months = U.lastMonths(8);
+    const months = U.lastMonths(12);
     const all = payouts();
+    const settled = Object.fromEntries(P.state.redemptions.filter(r => r.status === 'completed').map(r => [r.inv, r.settled]));
+    const aumS = months.map(m => { const e = U.monthEnd(m) > P.TODAY ? P.TODAY : U.monthEnd(m); return invs.filter(i => i.start && i.start <= e && !(settled[i.code] && settled[i.code] <= e)).reduce((s, i) => s + i.principal, 0); });
+    const paidByAcc = months.map(m => all.filter(a => a.end.slice(0, 7) === m && a.status === 'paid').reduce((s, a) => s + a.amount, 0));
+    const dueByAcc = months.map(m => all.filter(a => a.end.slice(0, 7) === m && a.status !== 'paid').reduce((s, a) => s + a.amount, 0));
+    const months8 = months.slice(-8);
     const accS = months.map(m => all.filter(a => a.end.slice(0, 7) === m).reduce((s, a) => s + a.amount, 0));
     const paidS = months.map(m => all.filter(a => a.status === 'paid' && (a.pay.at || a.end).slice(0, 7) === m).reduce((s, a) => s + a.amount, 0));
     const volS = months.map(m => invs.filter(i => i.start && i.start.slice(0, 7) === m).reduce((s, i) => s + i.principal, 0));
-    const byPlan = P.plans().filter(p => p.status !== 'archived').map((p, ix) => ({ name: p.name + ' · ' + p.cur.rate.toFixed(2) + '%', value: live.filter(i => i.planId === p.id).reduce((s, i) => s + i.principal, 0), color: ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)'][ix] }));
+    const byPlan = P.plans().filter(p => p.status !== 'archived').map((p, ix) => ({ name: p.name + ' · ' + p.cur.rate.toFixed(2) + '%', value: live.filter(i => i.planId === p.id).reduce((s, i) => s + i.principal, 0), color: ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)'][ix % 4] }));
     const l6 = live.filter(i => i.lockin === 6).length, l12 = live.filter(i => i.lockin === 12).length;
     const tx = P.transactions().slice(0, 6);
     return `${crumb('Overview')}
-      <div class="ph"><div><h1>Good morning, Priya</h1><p>Portfolio as of ${D(P.TODAY)} · all figures derived from ledger records</p></div><div class="acts"><button class="btn" data-act="export-overview">${U.icon('download')}Export</button><button class="btn accent" data-act="new-investment">${U.icon('plus')}Record investment</button></div></div>
+      <div class="ph"><div><h1>Good morning, Chaitra</h1><p>Portfolio as of ${D(P.TODAY)} · all figures derived from ledger records</p></div><div class="acts"><button class="btn" data-act="export-overview">${U.icon('download')}Export</button><button class="btn accent" data-act="new-investment">${U.icon('plus')}Record investment</button></div></div>
       <div class="kpis">
         ${U.kpi('Registered investors', P.investors.length, '+3 this month', { subCls: 'up', tip: 'All investor accounts, any status.' })}
         ${U.kpi('Active investors', activeInvestors, 'With ≥1 live investment', { tip: 'Investors with at least one investment that is active, matured or in redemption.' })}
@@ -78,14 +84,14 @@
         ${U.kpi('Pending redemptions', pendRed.length, S(pendRed.reduce((s, r) => s + r.i.principal, 0)) + ' requested', { subCls: 'warn', tip: 'Redemption requests not yet completed or rejected.' })}
       </div>
       <div class="grid g-2-1">
-        <div class="card"><div class="card-h"><h3>Monthly return accruals vs confirmed payouts</h3><div class="r legend"><span><i style="background:var(--chart-1)"></i>Accrued</span><span><i style="background:var(--green)"></i>Paid</span></div></div>
-          <div class="card-b">${U.barChart(months.map(U.monthLabel), [{ name: 'Accrued', color: 'var(--chart-1)', values: accS }, { name: 'Paid', color: 'var(--green)', values: paidS }], { fmt: v => S(v).replace('.00', ''), tipFmt: M, label: 'Accrued vs paid returns by month' })}</div></div>
+        <div class="card"><div class="card-h"><div><h3>Portfolio growth and monthly returns</h3><p class="hint">Last 12 months · returns grouped by the month they were earned</p></div><div class="r legend"><span><i style="background:var(--chart-1)"></i>Returns paid</span><span><i style="background:var(--chart-2)"></i>Returns awaiting payment</span><span><i class="ln" style="background:var(--chart-3)"></i>Principal invested</span></div></div>
+          <div class="card-b">${U.chart(months.map(U.monthLabel), [{ name: 'Returns paid', color: 'var(--chart-1)', values: paidByAcc, kind: 'bar' }, { name: 'Returns awaiting payment', color: 'var(--chart-2)', values: dueByAcc, kind: 'bar' }, { name: 'Principal invested', color: 'var(--chart-3)', values: aumS, kind: 'area', axis: 'right' }], { stack: true, h: 270, fmt: v => S(v).replace('.00', ''), tipFmt: M, fmtR: v => S(v).replace('.00', ''), tipFmtR: S, tipTitle: i => U.monthTitle(months[i]), label: 'Principal invested and monthly returns' })}</div></div>
         <div class="card"><div class="card-h"><h3>Pending administrative actions</h3><div class="r">${adminAlerts().length} open</div></div><div class="card-b list">
           ${adminAlerts().slice(0, 6).map(x => `<div data-go="${x[2]}" style="cursor:pointer"><span class="badge b-amber">${x[0]}</span><div class="grow"><b>${esc(x[1])}</b></div><span class="muted">›</span></div>`).join('') || '<div class="empty"><b>All clear</b>No actions waiting.</div>'}
         </div></div>
       </div>
       <div class="grid g-1-1-1">
-        <div class="card"><div class="card-h"><h3>Monthly investment volume</h3></div><div class="card-b">${U.barChart(months.map(U.monthLabel), [{ name: 'New principal', color: 'var(--chart-2)', values: volS }], { h: 200, w: 420, fmt: v => S(v).replace('.00', ''), tipFmt: M, label: 'New principal by month' })}</div></div>
+        <div class="card"><div class="card-h"><h3>Monthly investment volume</h3></div><div class="card-b">${U.barChart(months8.map(U.monthLabel), [{ name: 'New principal', color: 'var(--chart-1)', values: volS.slice(-8) }], { h: 230, w: 340, tipTitle: i => U.monthTitle(months8[i]), fmt: v => S(v).replace('.00', ''), tipFmt: M, label: 'New principal by month' })}</div></div>
         <div class="card"><div class="card-h"><h3>Principal by plan</h3></div><div class="card-b">${U.donut(byPlan, { fmt: S, center1: 'Total', center2: S(principal), label: 'Principal by plan' })}</div></div>
         <div class="card"><div class="card-h"><h3>Lock-in distribution</h3></div><div class="card-b" style="display:grid;gap:14px">
           ${[['6-month lock-in', l6], ['12-month lock-in', l12]].map(([n, v]) => `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span>${n}</span><b class="num" style="font-weight:500">${v} investments · ${Math.round(v / (l6 + l12) * 100)}%</b></div><div class="hbar"><div style="width:${v / (l6 + l12) * 100}%"></div></div></div>`).join('')}
@@ -381,7 +387,7 @@
     const all = payouts(); const sum = all.filter(p => ids.includes(p.id)).reduce((s, p) => s + p.amount, 0); const op = t.dataset.op;
     if (op === 'confirm') {
       U.modal(`Confirm ${ids.length} payouts as paid?`, 'Only confirm after the bank shows these transfers as completed.',
-        `<dl class="kv"><dt>Total</dt><dd>${M(sum)}</dd><dt>Batch</dt><dd class="mono">BATCH-2026-10-A</dd><dt>Prepared by</dt><dd>Priya Sharma</dd><dt>Confirming as</dt><dd>${CHECKER} (approver)</dd></dl>
+        `<dl class="kv"><dt>Total</dt><dd>${M(sum)}</dd><dt>Batch</dt><dd class="mono">BATCH-2026-10-A</dd><dt>Prepared by</dt><dd>${esc(ME.name)}</dd><dt>Confirming as</dt><dd>${CHECKER} (approver)</dd></dl>
         <div class="field"><label for="pc-ref">Bank batch / UTR reference</label><input class="input" id="pc-ref" value="NEFT-B-${P.TODAY.replace(/-/g, '')}-${String(ids.length).padStart(4, '0')}"></div><div class="field"><label for="pc-doc">Bank confirmation</label><input class="input" id="pc-doc" type="file"></div>`,
         `<button class="btn ghost" data-act="close">Cancel</button><button class="btn primary" data-act="do-pay" data-op="paid" data-ids="${ids.join(',')}">Confirm paid</button>`);
     } else {
@@ -535,8 +541,8 @@
             <label class="check"><input type="checkbox" id="st-em" ${s.email ? 'checked' : ''}> Send notification emails (needs email provider)</label>
             <div style="display:flex;justify-content:flex-end"><button class="btn primary" data-act="save-settings">Save changes</button></div></div></div>
           <div class="card"><div class="card-h"><h3>Administrators</h3><div class="r"><button class="btn sm">Invite admin</button></div></div><div class="card-b list">
-            <div><div class="avatar" style="width:30px;height:30px;font-size:11px">PS</div><div class="grow"><b>Priya Sharma</b><span>priya.sharma@astercapital.example · 2FA on</span></div>${U.badge('Super Admin', 'b-navy')}</div>
-            <div><div class="avatar" style="width:30px;height:30px;font-size:11px">KM</div><div class="grow"><b>Karan Mehta</b><span>karan.mehta@astercapital.example · 2FA on</span></div>${U.badge('Super Admin', 'b-navy')}</div></div></div>
+            <div><div class="avatar" style="width:30px;height:30px;font-size:11px">CH</div><div class="grow"><b>Chaitra</b><span>chaitra@parvarealty.ae · 2FA on</span></div>${U.badge('Super Admin', 'b-navy')}</div>
+            <div><div class="avatar" style="width:30px;height:30px;font-size:11px">KM</div><div class="grow"><b>Karan Mehta</b><span>karan.mehta@parvarealty.ae · 2FA on</span></div>${U.badge('Super Admin', 'b-navy')}</div></div></div>
           <div class="card"><div class="card-h"><h3>Integrations</h3></div><div class="card-b list">
             <div><div class="grow"><b>Payment provider</b><span>Not configured. Payouts use the manual bank-transfer workflow.</span></div>${U.badge('Manual', 'b-amber')}</div>
             <div><div class="grow"><b>Email delivery</b><span>Not configured. In-app notifications only.</span></div>${U.badge('Off', 'b-grey')}</div>
