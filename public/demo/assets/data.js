@@ -118,20 +118,43 @@
       reads: {},                      // notifId -> true
       extraNotifs: [],                // pushed by admin actions
       audit: [],
-      investmentsAdded: [], funded: {},
+      investmentsAdded: [], funded: {}, investorsAdded: [], plansAdded: [], invEdits: {},
       settings: { approachingDays: 60, fourEyes: true, email: false, customLockin: false }
     };
   }
   let state;
-  function load() { try { const s = localStorage.getItem(KEY); state = s ? Object.assign(freshState(), JSON.parse(s)) : freshState(); } catch (e) { state = freshState(); } }
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} try { window.dispatchEvent(new Event('pms-state')); } catch (e) {} }
-  function reset() { try { localStorage.removeItem(KEY); } catch (e) {} state = freshState(); }
+  const baseInvestorCount = investors.length;
+  const baseInvestorState = investors.map(v => ({ status: v.status, kyc: v.kyc }));
+  // Investors added by the admin and status/KYC edits live in state so they survive a reload.
+  function applyInvestors() {
+    investors.length = baseInvestorCount;
+    investors.forEach((v, i) => Object.assign(v, baseInvestorState[i]));
+    (state.investorsAdded || []).forEach(v => investors.push(Object.assign({}, v)));
+    Object.keys(state.invEdits || {}).forEach(id => { const v = investors.find(x => x.id === id); if (v) Object.assign(v, state.invEdits[id]); });
+  }
+  function load() { try { const s = localStorage.getItem(KEY); state = s ? Object.assign(freshState(), JSON.parse(s)) : freshState(); } catch (e) { state = freshState(); } applyInvestors(); }
+  function save() {
+    investors.forEach((v, i) => { if (i >= baseInvestorCount) { Object.assign(state.investorsAdded[i - baseInvestorCount] || {}, { status: v.status, kyc: v.kyc }); return; }
+      const b = baseInvestorState[i]; if (v.status !== b.status || v.kyc !== b.kyc) state.invEdits[v.id] = { status: v.status, kyc: v.kyc }; });
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} try { window.dispatchEvent(new Event('pms-state')); } catch (e) {}
+  }
+  function addInvestor(d) {
+    const id = 'INVR-' + String(1001 + investors.length);
+    const v = { id, name: d.name, email: d.email, phone: d.phone || '—', registered: TODAY, kyc: 'pending', status: 'active', city: d.city || '—', bank: '—' };
+    state.investorsAdded.push(v); investors.push(Object.assign({}, v)); save(); return id;
+  }
+  function addPlan(d) {
+    const p = Object.assign({ status: 'draft', created: TODAY, createdBy: d.by,
+      terms: plans[0].terms, risk: plans[0].risk }, d);
+    state.plansAdded.push(p); save(); return p.id;
+  }
+  function reset() { try { localStorage.removeItem(KEY); } catch (e) {} state = freshState(); applyInvestors(); }
   load();
   window.addEventListener('storage', e => { if (e.key === KEY) { load(); window.dispatchEvent(new Event('pms-state')); } });
 
   /* ---------- derived model ---------- */
   function planList() {
-    return plans.map(p => {
+    return plans.concat(state.plansAdded || []).map(p => {
       const o = state.planOverrides[p.id];
       const versions = o && o.versions ? p.versions.concat(o.versions) : p.versions;
       return Object.assign({}, p, { status: (o && o.status) || p.status, versions, cur: versions[versions.length - 1] });
@@ -153,11 +176,12 @@
   let seq = 0;
   function buildInvestment(r) {
     const [code, ii, planId, ver, principal, lockin] = r; const start = r[6] || (state.funded || {})[code] || null;
-    const plan = plans.find(p => p.id === planId);
+    const plan = planList().find(p => p.id === planId);
     const pv = plan.versions.find(v => v.v === ver);
     const investor = investors[ii];
     const inv = { code, investorId: investor.id, investor: investor.name, planId, planName: plan.name, planVersion: ver, rate: pv.rate, principal, lockin, start,
       early: pv.early, agreement: 'AGR-' + code.slice(4) };
+    if (!start && (state.cancelled || {})[code]) { inv.status = 'cancelled'; inv.created = state.cancelled[code]; inv.accruals = []; inv.maturity = null; return finish(inv); }
     if (!start) { inv.status = 'pending_funding'; inv.created = addDays(TODAY, -2 - (ii % 3)); inv.accruals = []; inv.maturity = null; return finish(inv); }
     inv.maturity = addMonths(start, lockin);
     inv.lockinEnd = inv.maturity; inv.eligible = inv.maturity; inv.requestFrom = addDays(inv.maturity, -30);
@@ -182,7 +206,7 @@
     inv.approved = sum(a => a.pay.status === 'approved');
     inv.outstanding = inv.accrued - inv.paid;
     const openRed = state.redemptions.find(x => x.inv === inv.code && ['requested','under_review','approved','processing'].includes(x.status));
-    if (inv.status !== 'pending_funding') {
+    if (inv.status !== 'pending_funding' && inv.status !== 'cancelled') {
       if (inv.redeemed) inv.status = 'redeemed';
       else if (openRed) inv.status = openRed.status === 'processing' || openRed.status === 'approved' ? 'redemption_processing' : 'redemption_requested';
       else if (inv.maturity <= TODAY) inv.status = 'matured';
@@ -295,6 +319,6 @@
     processing: ['Processing', 'b-blue'], completed: ['Completed', 'b-green'], rejected: ['Rejected', 'b-red'], withdrawn: ['Withdrawn', 'b-grey']
   };
 
-  window.PMS = { TODAY, BRAND, addMonths, addDays, diffDays, monthlyReturnPaise, plans: planList, planBy, investors, invBy, investments, transactions, notificationsFor, audit, log,
+  window.PMS = { addInvestor, addPlan, TODAY, BRAND, addMonths, addDays, diffDays, monthlyReturnPaise, plans: planList, planBy, investors, invBy, investments, transactions, notificationsFor, audit, log,
     get state() { return state; }, save, reset, fmtMoney, fmtShort, fmtDate, fmtDateShort, fmtRate, MONTHS, REDEMPTION, annAudience };
 })();

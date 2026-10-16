@@ -46,7 +46,7 @@
   function shell(cfg) {
     const collapsed = (() => { try { return localStorage.getItem('pms-side') === '1'; } catch (e) { return false; } })();
     document.body.innerHTML = `
-      <div class="demo-bar">Interactive design prototype with sample data. Changes are saved in this browser only. <a data-act="reset-demo">Reset demo data</a> · <a href="index.html">Switch role</a></div>
+      <div class="demo-bar">Demo with sample data. Your changes are saved on this device. <a data-act="reset-demo">Reset sample data</a> · <a href="index.html">Switch account</a></div>
       <div class="shell ${collapsed ? 'collapsed' : ''}" id="shell">
         <aside class="sidebar" id="sidebar">
           <div class="brand"><div class="logo">${P.BRAND.short}</div><div class="brand-txt"><b>${P.BRAND.name}</b><small>${esc(cfg.roleLabel)}</small></div></div>
@@ -103,6 +103,8 @@
     if (a === 'collapse') { const s = document.getElementById('shell'); s.classList.toggle('collapsed'); try { localStorage.setItem('pms-side', s.classList.contains('collapsed') ? '1' : '0'); } catch (er) {} }
     else if (a === 'mob-menu') document.getElementById('shell').classList.toggle('mob-open');
     else if (a === 'close') closeOverlay();
+    else if (a === 'doc-download') { if (curDoc) { const l = document.createElement('a'); l.href = URL.createObjectURL(new Blob([docFile()], { type: 'text/html' })); l.download = curDoc.file + '.html'; document.body.appendChild(l); l.click(); l.remove(); toast('Downloaded', curDoc.file + '.html'); } }
+    else if (a === 'doc-print') { if (curDoc) { const w = window.open('', '_blank'); if (!w) { toast('Allow pop-ups to print', 'Your browser blocked the print window.', 'warn'); return; } w.document.write(docFile()); w.document.close(); w.focus(); setTimeout(() => w.print(), 300); } }
     else if (a === 'reset-demo') { P.reset(); toast('Demo data reset', 'All sample data is back to its starting state.'); setTimeout(() => location.reload(), 600); }
     else if (a === 'user-menu') { const pop = document.getElementById('user-pop'); if (pop.innerHTML) { closePops(); return; } closePops(); pop.innerHTML = `<div class="popover" style="width:220px"><div class="pl" style="padding:6px"><a class="nav-a" style="color:var(--fg)" href="index.html">${icon('logout')}<span>Sign out</span></a></div></div>`; }
     else if (UI.actions[a]) UI.actions[a](t, e);
@@ -124,6 +126,28 @@
     const el = document.createElement('div'); el.className = 'toast'; el.setAttribute('role', 'status');
     el.innerHTML = `<span class="ti" style="background:${c[0]}">${c[1]}</span><div><b>${esc(title)}</b>${sub ? `<span>${esc(sub)}</span>` : ''}</div>`;
     document.getElementById('toasts').appendChild(el); setTimeout(() => el.remove(), 4200);
+  }
+
+  /* ---------- printable documents (statements, reports, KYC files) ---------- */
+  let curDoc = null;
+  const DOC_CSS = 'body{font:13px/1.5 "Plus Jakarta Sans",Arial,sans-serif;color:#111827;margin:32px}h1{font-size:20px;margin:0 0 4px}h2{font-size:14px;margin:22px 0 8px}table{border-collapse:collapse;width:100%;font-size:12px}th,td{border-bottom:1px solid #E5E7EB;padding:7px 8px;text-align:left}th{background:#F3F4F6;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#6B7280}.dh{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #4F46E5;padding-bottom:12px;margin-bottom:14px}.muted{color:#6B7280}.sum{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:12px 0}.sum div{background:#F5F5FF;border-radius:8px;padding:10px}.sum b{display:block;font-size:15px}.foot{margin-top:24px;font-size:11px;color:#6B7280}';
+  function docHead(title, sub) { return `<div class="dh"><div><h1>${esc(title)}</h1><div class="muted">${sub || ''}</div></div><div style="text-align:right"><b>${esc(P.BRAND.name)}</b><div class="muted">Generated ${P.fmtDate(P.TODAY)}</div></div></div>`; }
+  function docTable(rows) { const [h, ...b] = rows; return `<table><thead><tr>${h.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${b.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${h.length}" class="muted">No records</td></tr>`}</tbody></table>`; }
+  function statement(invs, who) {
+    const sum = f => invs.reduce((s, i) => s + f(i), 0);
+    return docHead('Investment statement', esc(who) + ' · ' + invs.length + ' investment' + (invs.length === 1 ? '' : 's')) +
+      `<div class="sum"><div>Principal<b>${P.fmtMoney(sum(i => i.status === 'redeemed' ? 0 : i.principal))}</b></div><div>Returns accrued<b>${P.fmtMoney(sum(i => i.accrued))}</b></div><div>Returns paid<b>${P.fmtMoney(sum(i => i.paid))}</b></div><div>Outstanding<b>${P.fmtMoney(sum(i => i.outstanding))}</b></div></div>` +
+      invs.map(i => `<h2>${esc(i.code)} · ${esc(i.planName)} v${i.planVersion} · ${P.fmtMoney(i.principal)} at ${i.rate.toFixed(2)}% per month</h2><div class="muted" style="margin-bottom:6px">Start ${P.fmtDate(i.start)} · ${i.lockin}-month lock-in · maturity ${P.fmtDate(i.maturity)} · ${esc(i.label)}</div>` +
+        docTable([['Period', 'Accrued on', 'Amount', 'Payout', 'Reference']].concat(i.accruals.map(a => ['Month ' + a.k, P.fmtDate(a.end), P.fmtMoney(a.amount), PAY_BADGE[a.pay.status][0], a.pay.ref || '—'])))).join('') +
+      '<p class="foot">Returns are simple interest on the original principal. Sample statement generated from demo data.</p>';
+  }
+  function docView(title, html, fileBase) {
+    curDoc = { title, html, file: (fileBase || title).replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '') };
+    document.getElementById('overlay').innerHTML = `<div class="scrim" data-act="close"></div><div class="modal doc-modal" role="dialog" aria-modal="true"><div class="mh"><div style="display:flex;align-items:center;gap:10px"><h3>${esc(title)}</h3><button class="x" data-act="close" aria-label="Close">×</button></div></div><div class="mb"><div class="doc-paper">${html}</div></div><div class="mf"><button class="btn ghost" data-act="close">Close</button><button class="btn" data-act="doc-download">${icon('download')}Download</button><button class="btn primary" data-act="doc-print">Print or save as PDF</button></div></div>`;
+  }
+  function docFile() { return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(curDoc.title)}</title><style>${DOC_CSS}</style></head><body>${curDoc.html}</body></html>`; }
+  function kycDoc(name, who) {
+    return docHead(name.replace(/\.(pdf|jpg)$/, ''), esc(who)) + `<table><tbody><tr><th>Document</th><td>${esc(name)}</td></tr><tr><th>Holder</th><td>${esc(who)}</td></tr><tr><th>Status</th><td>Reviewed by compliance</td></tr><tr><th>Stored</th><td>Encrypted document store, access logged</td></tr></tbody></table><p class="foot">Sample document from the demo. Real files are shown here once uploaded.</p>`;
   }
 
   /* ---------- data table: search, filter chips, sort, paginate ---------- */
@@ -196,6 +220,6 @@
   function lastMonths(n) { const out = []; let [y, m] = P.TODAY.split('-').map(Number); for (let i = n - 1; i >= 0; i--) { let mm = m - i, yy = y; while (mm < 1) { mm += 12; yy--; } out.push(yy + '-' + String(mm).padStart(2, '0')); } return out; }
   const monthLabel = ym => P.MONTHS[+ym.slice(5) - 1] + (ym.slice(5) === '01' ? ' ' + ym.slice(2, 4) : '');
 
-  const UI = { esc, icon, badge, invBadge, payBadge, txnBadge, redBadge, tip, kpi, shell, router, nav, drawer, modal, closeOverlay, toast, table, renderTable, bindTables, barChart, donut, lastMonths, monthLabel, actions: {}, closePops };
+  const UI = { docView, docHead, docTable, statement, kycDoc, esc, icon, badge, invBadge, payBadge, txnBadge, redBadge, tip, kpi, shell, router, nav, drawer, modal, closeOverlay, toast, table, renderTable, bindTables, barChart, donut, lastMonths, monthLabel, actions: {}, closePops };
   window.UI = UI;
 })();

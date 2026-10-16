@@ -143,7 +143,7 @@
           ${invs.map(i => `<tr class="click" data-go="investments/${i.code}"><td class="m">${i.code}</td><td>${i.planName} v${i.planVersion}<span class="sub">${i.lockin} months</span></td><td class="n">${M(i.principal)}</td><td>${P.fmtRate(i.rate)}</td><td>${D(i.maturity)}</td><td class="n">${M(i.accrued)}</td><td class="n pos">${M(i.paid)}</td><td>${U.invBadge(i)}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">No investments yet</td></tr>'}
         </tbody></table></div></div>
         <div class="card"><div class="card-h"><h3>Profile & verification</h3></div><div class="card-b" style="display:grid;gap:14px"><dl class="kv"><dt>Registered</dt><dd>${D(v.registered)}</dd><dt>City</dt><dd>${v.city}</dd><dt>PAN</dt><dd class="mono">ABCPR••••K</dd><dt>Bank account</dt><dd class="mono">${v.bank}</dd><dt>Verification</dt><dd>${kycBadge(v.kyc)}</dd></dl>
-          <div class="list">${['PAN card.pdf', 'Aadhaar (masked).pdf', 'Cancelled cheque.jpg'].map(d => `<div>${U.icon('doc', '')}<div class="grow"><b>${d}</b><span>Uploaded ${D(v.registered)}</span></div><button class="btn sm" data-act="fake-dl">View</button></div>`).join('')}</div>
+          <div class="list">${['PAN card.pdf', 'Aadhaar (masked).pdf', 'Cancelled cheque.jpg'].map(d => `<div>${U.icon('doc', '')}<div class="grow"><b>${d}</b><span>Uploaded ${D(v.registered)}</span></div><button class="btn sm" data-act="kyc-doc" data-who="${esc(v.name)}">View</button></div>`).join('')}</div>
           ${v.kyc === 'pending' ? `<div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn danger" data-act="kyc" data-id="${v.id}" data-d="rejected">Reject</button><button class="btn primary" data-act="kyc" data-id="${v.id}" data-d="verified">Verify investor</button></div>` : ''}
         </div></div>
       </div>
@@ -164,7 +164,11 @@
     `<button class="btn ghost" data-act="close">Cancel</button><button class="btn primary" data-act="save-investor">Create and send invite</button>`);
   U.actions['save-investor'] = () => { const n = document.getElementById('ni-n'), e = document.getElementById('ni-e'); let ok = true;
     [n, e].forEach(x => { if (!x.value.trim()) { x.classList.add('bad'); ok = false; } }); if (!ok) { U.toast('Fill in the highlighted fields', 'Name and email are required.', 'err'); return; }
-    U.closeOverlay(); U.toast('Invitation sent', 'In the full product this creates the account. The prototype keeps the directory fixed.', 'info'); };
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e.value.trim())) { e.classList.add('bad'); U.toast('Check the email address', 'Enter a valid email such as name@example.com.', 'err'); return; }
+    if (P.investors.some(x => x.email.toLowerCase() === e.value.trim().toLowerCase())) { e.classList.add('bad'); U.toast('Email already registered', 'Another investor already uses this email.', 'err'); return; }
+    const id = P.addInvestor({ name: n.value.trim(), email: e.value.trim(), phone: document.getElementById('ni-p').value.trim(), city: document.getElementById('ni-c').value.trim() });
+    P.log(ME.name, 'investor.create', id, 'Invitation sent to ' + e.value.trim(), 'status: — → active · kyc: pending'); P.save();
+    U.closeOverlay(); U.toast('Investor added', n.value.trim() + ' · invitation sent. KYC is pending.'); U.nav('investors/' + id); };
   U.actions['notify-investor'] = t => openComposer({ aud: 'selected', ids: [t.dataset.id] });
 
   /* =============== PLANS =============== */
@@ -173,7 +177,7 @@
     if (p[0]) return planDetail(p[0]);
     const invs = P.investments();
     return `${crumb('Investment Plans')}<div class="ph"><div><h1>Investment Plans</h1><p>Rates are configurable. Editing a plan creates a new version; existing investments keep the terms they signed.</p></div><div class="acts"><button class="btn accent" data-act="new-plan">${U.icon('plus')}New plan</button></div></div>
-      <div class="grid g-1-1-1">${P.plans().map(pl => { const m = invs.filter(i => i.planId === pl.id && !['redeemed', 'pending_funding'].includes(i.status));
+      <div class="grid g-1-1-1">${P.plans().map(pl => { const m = invs.filter(i => i.planId === pl.id && !['redeemed', 'pending_funding', 'cancelled'].includes(i.status));
         return `<div class="card" data-go="plans/${pl.id}" style="cursor:pointer"><div class="card-h"><h3>${esc(pl.name)}</h3><span class="mono muted">${pl.id} · v${pl.cur.v}</span><div class="r">${planBadge(pl.status)}</div></div>
         <div class="card-b" style="display:grid;gap:14px"><div><div style="font-size:30px;font-weight:700;letter-spacing:-.02em" class="num">${pl.cur.rate.toFixed(2)}%</div><div class="hint">per month · simple interest on principal</div></div>
         <p class="muted" style="font-size:13px">${esc(pl.desc)}</p>
@@ -232,7 +236,12 @@
       route();
       if (wantAnn) setTimeout(() => openComposer({ aud: 'plan', plan: pl.id, title: pl.name + ' rate update for new investments', body: `From ${D(ver.from)}, new investments in ${pl.name} earn ${rate.toFixed(2)}% per month. Your existing investments on ${pl.name} keep the rate in your agreement.`, cat: 'Plan update' }), 350);
     } else {
-      U.closeOverlay(); U.toast('Plan created as draft', 'The prototype keeps the plan catalogue fixed; in the product it appears here immediately.', 'info');
+      const name = g('pf-name').value.trim(); let pid = (g('pf-id').value.trim() || ('PLN-' + name.replace(/[^A-Za-z0-9]/g, '').slice(0, 6))).toUpperCase();
+      if (P.planBy(pid)) { g('pf-id').classList.add('bad'); U.toast('Plan ID already used', 'Choose a different plan ID.', 'err'); return; }
+      ver.v = 1; ver.reason = reason || 'Initial plan';
+      P.addPlan({ id: pid, name, desc: g('pf-desc').value.trim() || 'New investment plan.', createdBy: ME.name, by: ME.name, versions: [ver] });
+      P.log(ME.name, 'plan.create', pid + ' v1', reason, 'status: — → draft · monthly_rate: ' + rate.toFixed(2) + '%'); P.save();
+      U.closeOverlay(); U.toast(name + ' created as draft', 'Activate it to open the plan for new investments.'); U.nav('plans/' + pid);
     }
   };
   U.actions['plan-status'] = t => { const pl = P.planBy(t.dataset.id); const s = t.dataset.s;
@@ -246,7 +255,7 @@
   function investments(p) {
     if (p[0]) return investmentDetail(p[0]);
     const rows = P.investments();
-    return `${crumb('Investments')}<div class="ph"><div><h1>Investment register</h1><p>${rows.length} investments · ${M(rows.filter(i => !['redeemed', 'pending_funding'].includes(i.status)).reduce((s, i) => s + i.principal, 0))} live principal</p></div><div class="acts"><button class="btn" data-act="csv" data-csv="investments">${U.icon('download')}Export CSV</button><button class="btn accent" data-act="new-investment">${U.icon('plus')}Record investment</button></div></div>
+    return `${crumb('Investments')}<div class="ph"><div><h1>Investment register</h1><p>${rows.length} investments · ${M(rows.filter(i => !['redeemed', 'pending_funding', 'cancelled'].includes(i.status)).reduce((s, i) => s + i.principal, 0))} live principal</p></div><div class="acts"><button class="btn" data-act="csv" data-csv="investments">${U.icon('download')}Export CSV</button><button class="btn accent" data-act="new-investment">${U.icon('plus')}Record investment</button></div></div>
       ${U.table('inv-reg', [
         { h: 'Investment', v: r => r.code, r: r => `<b class="mono">${r.code}</b><span class="sub">${r.agreement}</span>` },
         { h: 'Investor', v: r => r.investor, r: r => `${esc(r.investor)}<span class="sub">${r.investorId}</span>` },
@@ -274,7 +283,7 @@
     const nextK = i.accruals.length + 1;
     return `${crumb('Investments', code)}<a class="back" href="#/investments">${U.icon('back')} Investment register</a>
       <div class="ph"><div><h1>${code} · <a href="#/investors/${i.investorId}">${esc(i.investor)}</a> ${U.invBadge(i)}</h1><p>${i.planName} v${i.planVersion} · ${i.lockin}-month lock-in · ${i.start ? 'started ' + D(i.start) + ' · matures ' + D(i.maturity) + ' (' + i.daysLeft + ' days)' : 'awaiting deposit confirmation'}</p></div>
-      <div class="acts">${i.status === 'pending_funding' ? `<button class="btn danger" data-act="cancel-inv" data-code="${code}">Cancel</button><button class="btn primary" data-act="fund" data-code="${code}">Confirm deposit & activate</button>` : `<button class="btn" data-act="fake-dl">${U.icon('download')}Statement</button><button class="btn" data-act="adjust" data-code="${code}">Record adjustment</button><button class="btn" data-act="amend" data-code="${code}">Record amendment</button>`}</div></div>
+      <div class="acts">${i.status === 'pending_funding' ? `<button class="btn danger" data-act="cancel-inv" data-code="${code}">Cancel</button><button class="btn primary" data-act="fund" data-code="${code}">Confirm deposit & activate</button>` : `<button class="btn" data-act="inv-stmt" data-code="${code}">${U.icon('download')}Statement</button><button class="btn" data-act="adjust" data-code="${code}">Record adjustment</button><button class="btn" data-act="amend" data-code="${code}">Record amendment</button>`}</div></div>
       <div class="kpis">${U.kpi('Principal', M(i.principal), 'Original, never changes')}${U.kpi('Monthly return', i.monthly ? M(i.monthly) : '—', P.fmtRate(i.rate) + ' × principal')}${U.kpi('Accrued to date', M(i.accrued), i.accruals.length + ' of ' + i.lockin + ' periods')}${U.kpi('Paid (confirmed)', M(i.paid), i.accruals.filter(a => a.pay.status === 'paid').length + ' payouts', { cls: 'pos' })}${U.kpi('Outstanding', M(i.outstanding), i.processing ? M(i.processing) + ' processing' : 'Not yet paid', { subCls: i.outstanding ? 'warn' : '' })}</div>
       <div class="grid g-2-1">
         <div class="card"><div class="card-h"><h3>Monthly accruals and payouts</h3><div class="r">Period = start-date anniversary</div></div><div class="tbl"><table><thead><tr><th>#</th><th>Period</th><th class="n">Amount</th><th>Accrued on</th><th>Payout</th><th>Reference</th></tr></thead><tbody>
@@ -317,7 +326,11 @@
     `<div class="field"><label for="fd-ref">Bank reference (UTR)</label><input class="input" id="fd-ref" value="UTR 58${Math.floor(Math.random() * 1e8)}"></div><div class="note info">Approver: ${CHECKER}. The person who recorded the investment cannot activate it.</div>`,
     `<button class="btn ghost" data-act="close">Cancel</button><button class="btn primary" data-act="do-fund" data-code="${t.dataset.code}">Confirm & activate</button>`);
   U.actions['do-fund'] = t => { P.state.funded[t.dataset.code] = P.TODAY; P.log(CHECKER, 'investment.activate', t.dataset.code, 'Deposit confirmed ' + document.getElementById('fd-ref').value, 'status: pending_funding → active'); P.save(); U.closeOverlay(); U.toast(t.dataset.code + ' is active', 'Terms snapshot saved. The investor can now see it.'); route(); };
-  U.actions['cancel-inv'] = t => U.toast('Cancellation needs a reason', 'In the product this opens the cancellation form and refund workflow.', 'info');
+  U.actions['cancel-inv'] = t => U.modal('Cancel ' + t.dataset.code + '?', 'The investment was never funded, so no money moves. It stays on record as cancelled.',
+    `<div class="field"><label for="cx-r">Reason (required, saved to audit log)</label><input class="input" id="cx-r" placeholder="e.g. Investor withdrew before funding"></div>`,
+    `<button class="btn ghost" data-act="close">Keep investment</button><button class="btn danger" data-act="do-cancel" data-code="${t.dataset.code}">Cancel investment</button>`);
+  U.actions['do-cancel'] = t => { const r = document.getElementById('cx-r'); if (!r.value.trim()) { r.classList.add('bad'); U.toast('Enter a reason', 'A reason is required to cancel.', 'err'); return; }
+    P.state.cancelled = P.state.cancelled || {}; P.state.cancelled[t.dataset.code] = P.TODAY; P.log(ME.name, 'investment.cancel', t.dataset.code, r.value.trim(), 'status: pending_funding → cancelled'); P.save(); U.closeOverlay(); U.toast(t.dataset.code + ' cancelled', 'Recorded in the audit log.'); route(); };
   U.actions.adjust = t => U.modal('Record adjustment · ' + t.dataset.code, 'Adjustments post a new ledger entry. Balances cannot be edited directly.',
     `<div class="field"><label for="ad-t">Type</label><select class="input" id="ad-t"><option>Accrual reversal</option><option>Correcting accrual</option><option>Fee</option></select></div><div class="field"><label for="ad-a">Amount (₹)</label><input class="input" id="ad-a" placeholder="0.00"></div><div class="field"><label for="ad-r">Reason (required)</label><input class="input" id="ad-r"></div><div class="note">Requires approval by a second admin before it posts.</div>`,
     `<button class="btn ghost" data-act="close">Cancel</button><button class="btn primary" data-act="do-adjust" data-code="${t.dataset.code}">Submit for approval</button>`);
@@ -474,7 +487,7 @@
   const REPORTS = [['Investor-wise investment report', 'Principal, accrued, paid and outstanding per investor', 'investors'], ['Plan-wise investment report', 'Investments and principal grouped by plan and version', 'plans'], ['Monthly return accrual report', 'All accrual entries for a month, with reversals', 'accruals'], ['Monthly payout report', 'Payouts by status, batch and bank reference', 'payouts'], ['Upcoming maturity report', 'Investments maturing in the next 90 days', 'maturity'], ['Redemption report', 'Requests, decisions and settlements', 'redemptions'], ['Transaction export', 'Full ledger for a date range', 'transactions'], ['Administrative activity history', 'Audit log entries by actor and action', 'audit'], ['Plan version history', 'Every plan version with rate changes and reasons', 'versions'], ['Approval and rejection history', 'Four-eyes decisions on payouts, redemptions, adjustments', 'approvals']];
   function reports() {
     return `${crumb('Reports')}<div class="ph"><div><h1>Reports</h1><p>Every report is generated from ledger and audit records. Exports are logged.</p></div><div class="acts"><select class="input" style="width:auto" id="rp-range" aria-label="Period"><option>Last 30 days</option><option>This quarter</option><option selected>Year to date</option><option>All time</option></select></div></div>
-      <div class="grid g-1-1">${REPORTS.map(r => `<div class="card"><div class="card-b" style="display:flex;gap:14px;align-items:center"><div class="icon-btn" style="width:42px;height:42px;background:var(--blue-soft);color:var(--blue);border:0">${U.icon('report')}</div><div style="flex:1;min-width:0"><b style="font-weight:600">${r[0]}</b><p class="hint">${r[1]}</p></div><button class="btn sm" data-act="csv" data-csv="${r[2]}">CSV</button><button class="btn sm" data-act="fake-dl">PDF</button></div></div>`).join('')}</div>`;
+      <div class="grid g-1-1">${REPORTS.map(r => `<div class="card"><div class="card-b" style="display:flex;gap:14px;align-items:center"><div class="icon-btn" style="width:42px;height:42px;background:var(--blue-soft);color:var(--blue);border:0">${U.icon('report')}</div><div style="flex:1;min-width:0"><b style="font-weight:600">${r[0]}</b><p class="hint">${r[1]}</p></div><button class="btn sm" data-act="csv" data-csv="${r[2]}">CSV</button><button class="btn sm" data-act="pdf" data-csv="${r[2]}">PDF</button></div></div>`).join('')}</div>`;
   }
   function csvFor(kind) {
     const invs = P.investments();
@@ -491,7 +504,10 @@
     try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'pms-' + t.dataset.csv + '-' + P.TODAY + '.csv'; document.body.appendChild(a); a.click(); a.remove(); } catch (e) {}
     P.log(ME.name, 'export.csv', t.dataset.csv, 'Report export', (rows.length - 1) + ' rows'); P.save(); U.toast('Export ready', (rows.length - 1) + ' rows · logged to audit trail'); };
   U.actions['export-overview'] = () => U.actions.csv({ dataset: { csv: 'investments' } });
-  U.actions['fake-dl'] = () => U.toast('Document preview', 'In the product this opens a secure, time-limited download link.', 'info');
+  U.actions.pdf = t => { const rows = csvFor(t.dataset.csv); const title = (REPORTS.find(r => r[2] === t.dataset.csv) || ['Report'])[0];
+    U.docView(title, U.docHead(title, (rows.length - 1) + ' rows') + U.docTable(rows), 'pms-' + t.dataset.csv + '-' + P.TODAY); P.log(ME.name, 'export.pdf', t.dataset.csv, 'Report export', (rows.length - 1) + ' rows'); P.save(); };
+  U.actions['inv-stmt'] = t => { const i = P.investments().find(x => x.code === t.dataset.code); U.docView('Statement · ' + i.code, U.statement([i], i.investor), 'statement-' + i.code); };
+  U.actions['kyc-doc'] = t => { const name = t.closest('div').querySelector('b').textContent; U.docView(name, U.kycDoc(name, t.dataset.who)); };
 
   /* =============== AUDIT =============== */
   function auditPage() {

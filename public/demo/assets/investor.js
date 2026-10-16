@@ -16,7 +16,7 @@
   });
   const ord = d => d + (d % 10 === 1 && d !== 11 ? 'st' : d % 10 === 2 && d !== 12 ? 'nd' : d % 10 === 3 && d !== 13 ? 'rd' : 'th');
   const crumb = (...p) => `<span data-crumb="${esc(p.map((x, i) => i === p.length - 1 ? '<b>' + esc(x) + '</b>' : esc(x)).join(' / '))}"></span>`;
-  const mine = () => P.investments().filter(i => i.investorId === ME_ID);
+  const mine = () => P.investments().filter(i => i.investorId === ME_ID && i.start);
   const notifs = () => P.notificationsFor(ME_ID);
   const anns = () => P.state.announcements.filter(a => a.status === 'published' && P.annAudience(a, ME_ID, P.investments())).sort((a, b) => b.at.localeCompare(a.at));
 
@@ -122,8 +122,12 @@
         </div>
       </div>`;
   }
-  U.actions.stmt = () => U.toast('Statement is being prepared', 'In the product this downloads a PDF statement through a secure link.', 'info');
-  U.actions.dl = () => U.toast('Download started', 'Documents are delivered through short-lived secure links.', 'info');
+  U.actions.stmt = () => { const h = (location.hash || '').slice(2).split('/'); const mine = P.investments().filter(i => i.investorId === ME_ID && i.start);
+    const one = h[0] === 'investments' && h[1] ? mine.filter(i => i.code === h[1]) : []; const list = one.length ? one : mine;
+    U.docView('Statement' + (one.length ? ' · ' + one[0].code : ''), U.statement(list, me.name), 'statement-' + (one.length ? one[0].code : 'all') + '-' + P.TODAY); };
+  U.actions.dl = t => { const row = t.closest('div'); const name = (row.querySelector('b') || {}).textContent || 'Document';
+    if (/^Statement/.test(name)) return U.actions.stmt();
+    U.docView(name, U.kycDoc(name, me.name)); };
 
   /* =============== MONTHLY RETURNS =============== */
   function returns() {
