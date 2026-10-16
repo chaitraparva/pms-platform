@@ -1,0 +1,30 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"><link rel="stylesheet" href="assets/app.css"><title>Sign in · Aster Capital PMS</title></head><body>
+<div class="login">
+  <section class="login-l">
+    <div class="brand" style="padding:0"><div class="logo">A</div><div class="brand-txt"><b>Aster Capital</b><small>Portfolio Management System</small></div></div>
+    <div style="display:grid;gap:14px;margin-top:40px;position:relative;z-index:1"><h1>Every investment, return and maturity in one place.</h1><p>Monthly simple-interest plans with contractual lock-ins, transparent accruals and confirmed payouts, for administrators and investors alike.</p></div>
+    <div class="login-stats"><div><b>3</b><span>Investment plans</span></div><div><b>6 / 12 months</b><span>Lock-in options</span></div><div><b>Simple</b><span>interest, never compounded</span></div></div>
+  </section>
+  <section class="login-r">
+    <form class="login-box" id="lf" novalidate>
+      <div><h2>Sign in</h2><p class="hint" style="font-size:13.5px;margin-top:4px">Choose a demo account to explore the prototype.</p></div>
+      <div class="role-pick">
+        <button type="button" class="role on" data-r="admin"><b>Super Admin</b><span>Priya Sharma · manages plans, payouts, investors</span></button>
+        <button type="button" class="role" data-r="investor"><b>Investor</b><span>Ananya Rao · 2 investments</span></button>
+      </div>
+      <div class="field"><label for="em">Email</label><input class="input" id="em" type="email" value="priya.sharma@astercapital.example" autocomplete="username"></div>
+      <div class="field"><label for="pw">Password</label><input class="input" id="pw" type="password" value="demo-password-123" autocomplete="current-password"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center"><label class="check"><input type="checkbox" id="rm" checked> Keep me signed in</label><a href="#" onclick="return false">Forgot password?</a></div>
+      <button class="btn primary" style="padding:13px" type="submit" id="go">Sign in as Super Admin</button>
+      <div class="divider">Security</div>
+      <p class="hint">Two-factor authentication, rate-limited sign-in and server-side sessions in the full product. This prototype runs entirely in your browser with sample data.</p>
+    </form>
+  </section>
+</div>
+<script>
+var role='admin';
+document.querySelectorAll('.role').forEach(function(b){b.addEventListener('click',function(){role=b.dataset.r;document.querySelectorAll('.role').forEach(function(x){x.classList.toggle('on',x===b)});
+document.getElementById('em').value=role==='admin'?'priya.sharma@astercapital.example':'ananya.rao@example.com';document.getElementById('go').textContent=role==='admin'?'Sign in as Super Admin':'Sign in as Investor';});});
+document.getElementById('lf').addEventListener('submit',function(e){e.preventDefault();var b=document.getElementById('go');b.textContent='Signing in…';b.disabled=true;setTimeout(function(){location.href=role==='admin'?'admin.html':'investor.html'},350);});
+</script>
+</body></html>
